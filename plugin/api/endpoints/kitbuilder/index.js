@@ -51,11 +51,12 @@ function ensureCore() {
         const storage = await import(u('core/storage.mjs'));
         const loudness = await import(u('core/loudness.mjs'));
         const wavRms = await import(u('core/wav_rms.mjs'));
+        const wavPeaks = await import(u('core/wav_peaks.mjs'));
         const mpcXpm = await import(u('exporters/mpc_xpm.mjs'));
 
         sampleIndex.configureDataDir(path.join(CORE_DIR, 'data'));
 
-        core = { kitModel, sampleClassifier, scanFilters, sampleIndex, randomAssign, storage, loudness, wavRms, mpcXpm };
+        core = { kitModel, sampleClassifier, scanFilters, sampleIndex, randomAssign, storage, loudness, wavRms, wavPeaks, mpcXpm };
 
         /* Load persisted state once, at first use. */
         const cur = storage.loadCurrentKit();
@@ -403,17 +404,18 @@ async function EXPORT() {
     });
 }
 
-/* ---- audition streaming ----------------------------------------------------
+/* ---- audition streaming / waveform peaks -----------------------------------
  *
- * The path is a URL segment (`/kit-builder/AUDIO/<encodeURIComponent(path)>`),
- * matching nodeServer's own file-browser READ/DOWNLOAD convention — NOT a
- * `?path=` query string, which the URL[2] router (see INIT()) can't match
- * against a plain switch/case since the query string rides along with the
- * segment. Only ever streams a path that's either the current kit's own pad
- * sample or a record in the loaded sample index — never an arbitrary path —
- * so this can't be used as an arbitrary-file-read primitive even though it's
- * an unauthenticated local endpoint (same trust model as the rest of
- * nodeServer, but this file doesn't widen it). */
+ * The path is a URL segment (`/kit-builder/AUDIO/<encodeURIComponent(path)>`,
+ * likewise for `PEAKS`), matching nodeServer's own file-browser READ/DOWNLOAD
+ * convention — NOT a `?path=` query string, which the URL[2] router (see
+ * INIT()) can't match against a plain switch/case since the query string
+ * rides along with the segment. Both AUDIO and PEAKS only ever touch a path
+ * that's either the current kit's own pad sample or a record in the loaded
+ * sample index — never an arbitrary path — so neither can be used as an
+ * arbitrary-file-read primitive even though this is an unauthenticated local
+ * endpoint (same trust model as the rest of nodeServer, but this file doesn't
+ * widen it). */
 function knownPaths(c) {
     const known = new Set();
     for (const p of state.kit.pads) if (p.sample && p.sample.filesystem_path) known.add(p.sample.filesystem_path);
@@ -436,6 +438,28 @@ async function AUDIO() {
         RES.writeHead(200, { 'Content-Type': mime, 'Content-Length': data.length });
         RES.end(data);
     });
+}
+
+/* Precomputed waveform peaks for the web UI's per-pad and side-panel preview
+ * (see core/wav_peaks.mjs for why this is done server-side instead of the
+ * browser's decodeAudioData()). Fixed 128-bucket resolution — decoupled from
+ * any particular canvas's pixel width, the client scales to fit. */
+async function PEAKS() {
+    const c = await ensureCore();
+    const p = decodeURIComponent(URL.slice(3).join('/'));
+    if (!p || !knownPaths(c).has(p)) {
+        RES.writeHead(404, { 'Content-Type': 'text/plain' });
+        RES.end('unknown sample path');
+        return;
+    }
+    let bytes;
+    try { bytes = fs.readFileSync(p); } catch (e) {
+        RES.writeHead(404, { 'Content-Type': 'text/plain' });
+        RES.end('read failed');
+        return;
+    }
+    const peaks = c.wavPeaks.wavPeaks(bytes, 128);
+    endJSON({ ok: true, peaks: peaks || null });
 }
 
 /* ---- router ---------------------------------------------------------------- */
@@ -465,6 +489,7 @@ function INIT($req, $res) {
         case 'SAVE': SAVE().catch(fail); break;
         case 'EXPORT': EXPORT().catch(fail); break;
         case 'AUDIO': AUDIO().catch(fail); break;
+        case 'PEAKS': PEAKS().catch(fail); break;
         default:
             RES.writeHead(404, { 'Content-Type': 'text/plain' });
             RES.end('unknown kit-builder action: ' + URL[2]);

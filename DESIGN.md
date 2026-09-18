@@ -327,28 +327,49 @@ scope; per-pad-tile was added on request once the side-panel version proved
 the approach — the earlier "16 canvases is wasteful" concern is addressed by
 caching (below), not by avoiding the per-pad case.
 
-Entirely client-side, no server changes: `client.js` fetches a sample from
-the existing `/kit-builder/AUDIO/...` endpoint, decodes it with the Web Audio
-API (`decodeAudioData`), downsamples channel 0 into one {min,max} pair per
-canvas pixel column, and draws the envelope. Decoded peaks are cached by
-`filesystem_path` (`waveformCache`), shared across both the pad-tile and
-side-panel canvases, so a kit with the same sample assigned to two pads (or a
-re-render after an unrelated action rebuilding the whole grid) only decodes
-each unique sample once. One `AudioContext` is created lazily and reused for
-every decode (`getAudioCtx()`) rather than one per canvas — a full 16-pad
-grid can trigger up to 16 concurrent `decodeAudioData()` calls on first
-render, and creating 16 separate `AudioContext`s for that would be wasteful
-of real audio-hardware resources for a purely visual decode.
+**Peaks are computed server-side**, not client-side. The first version of
+this feature decoded audio in the browser via the Web Audio API's
+`decodeAudioData()` — this was a real bug, not a hypothetical: that API is
+strict about "valid" WAV shapes and was silently rejecting real sample-pack
+content (24-bit PCM, extended `fmt ` headers, BWF/broadcast metadata chunks)
+that's perfectly well-formed, so some pads simply showed no waveform at all
+with no visible error. Fixed by reusing this project's own hand-rolled,
+permissive WAV parser — `core/wav_peaks.mjs`, a companion to `wav_rms.mjs`
+(same `wavChunks()` parser, same 8/16/24/32-bit-int + 32-bit-float support
+matrix) — behind a new `PEAKS` action (`GET /kit-builder/PEAKS/<encoded
+path>`, same `knownPaths()` trust gate as `AUDIO`), returning a fixed
+128-bucket `{min,max}[]` as JSON. `client.js` just fetches and paints; no
+audio decoding happens in the browser at all any more.
+
+Peaks are cached client-side by `filesystem_path` (`waveformCache`), shared
+across both the pad-tile and side-panel canvases, so a kit with the same
+sample assigned to two pads (or a re-render after an unrelated action
+rebuilding the whole grid) only fetches each unique sample's peaks once. A
+server-confirmed `null` (a file the parser couldn't read) is cached too —
+`waveformCache.has()`, not truthiness, is the check — specifically so an
+unsupported file doesn't get re-requested on every single re-render; a
+network/parse failure on the fetch itself is deliberately left uncached,
+since that might be transient and is worth retrying next render.
+
+`paintWaveform()` maps each canvas pixel column to a peaks index by
+proportion (`x * peaks.length / canvas.width`), not a 1:1 index-to-pixel
+assumption. This fixes a second latent bug from the original client-decode
+version: peaks are always exactly 128 entries now, but even before this fix,
+whenever a cached result's original resolution didn't match a canvas's own
+width (e.g. a 110px pad tile vs. a 260px side panel, or simply because two
+differently-sized canvases shared one cache entry), the old 1:1 loop would
+silently draw only the left portion of the waveform, squished, rather than
+scaling to fill the canvas.
 
 Every canvas is a fresh DOM element created on each render (`renderGrid()`/
 `renderPadDetail()` rebuild their containers from scratch), so the one race
-worth guarding — a slow decode finishing after a newer render already
+worth guarding — a slow fetch resolving after a newer render already
 replaced that pad's tile — is handled with a plain `canvas.isConnected`
-check before painting, rather than a shared monotonic token: painting into a
-detached canvas would be invisible anyway, and a per-canvas check is correct
-regardless of how many canvases are in flight at once (a shared token would
-incorrectly invalidate other pads' in-flight decodes the moment any one pad
-re-rendered).
+check before painting: painting into a detached canvas would be invisible
+anyway, and a per-canvas check is correct regardless of how many are in
+flight at once (a shared monotonic token, used in the original version,
+would incorrectly invalidate other pads' in-flight fetches the moment any
+one pad re-rendered).
 
 ## Explicitly out of scope for this version
 

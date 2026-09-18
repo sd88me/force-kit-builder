@@ -20,8 +20,7 @@
     let destDir = null;
     let browserTarget = null;     // 'root' | 'dest' | 'xpm-file' — what the open modal is choosing for
     let browserPath = '/media';
-    const waveformCache = new Map();   // filesystem_path -> Float32Array-ish peak buckets
-    let sharedAudioCtx = null;    // one AudioContext reused for every decode (pad tiles + side panel)
+    const waveformCache = new Map();   // filesystem_path -> {min,max}[] peak buckets from the server, or null
 
     // Confirmed live on real hardware 2026-09-18 (see DESIGN.md): factory
     // expansion kits live flat here, .xpm beside .wav, no manifest needed.
@@ -286,41 +285,23 @@
 
     /* ---- waveform (small per-pad preview + a larger one in the side panel) -
      *
-     * Both surfaces share one decode cache (keyed by filesystem_path) and one
-     * lazily-created AudioContext — a full 16-pad grid can trigger up to 16
-     * concurrent decodeAudioData() calls on first render, so reusing a single
-     * context (rather than `new AudioContext()` per canvas) avoids piling up
-     * real audio-hardware resources for what's a purely visual decode. */
-
-    function getAudioCtx() {
-        if (!sharedAudioCtx) {
-            const AC = window.AudioContext || window.webkitAudioContext;
-            sharedAudioCtx = new AC();
-        }
-        return sharedAudioCtx;
-    }
-
-    /* Downsample channel-0 PCM into `buckets` {min,max} pairs, one per pixel
-     * column, computed once and cached by path so repeated re-renders (every
-     * action calls refresh(), which rebuilds the whole grid) don't
-     * re-fetch/re-decode the same audio. */
-    function computePeaks(audioBuffer, buckets) {
-        const data = audioBuffer.getChannelData(0);
-        const per = Math.max(1, Math.floor(data.length / buckets));
-        const peaks = new Array(buckets);
-        for (let i = 0; i < buckets; i++) {
-            const start = i * per;
-            const end = i === buckets - 1 ? data.length : Math.min(data.length, start + per);
-            let min = 0, max = 0;
-            for (let j = start; j < end; j++) {
-                const v = data[j];
-                if (v < min) min = v;
-                if (v > max) max = v;
-            }
-            peaks[i] = { min, max };
-        }
-        return peaks;
-    }
+     * Peaks are computed SERVER-SIDE (`/kit-builder/PEAKS/...`, core/
+     * wav_peaks.mjs), not via the browser's decodeAudioData() — that API is
+     * strict about "valid" WAV shapes and was silently rejecting real
+     * sample-pack content (24-bit PCM, extended `fmt ` headers, BWF metadata
+     * chunks) that's perfectly well-formed, which is exactly why some pads
+     * showed no waveform at all. The server's hand-rolled parser (shared with
+     * wav_rms.mjs's loudness measurement) doesn't have that problem, and this
+     * also means only one thing ever decodes each file, not once per browser
+     * that happens to load this page.
+     *
+     * Peaks always come back as a fixed 128-bucket array, independent of any
+     * particular canvas's pixel width — the pad-tile canvas (~110px) and the
+     * side-panel one (~260px) both scale the same cached result to fit, in
+     * paintWaveform() below. Cached by filesystem_path, including a cached
+     * `null` (a file the parser couldn't read) — the point of caching a null
+     * is specifically to stop re-fetching/re-requesting it on every render,
+     * since `refresh()` rebuilds the whole grid after every action. */
 
     function paintWaveform(canvas, peaks) {
         const ctx = canvas.getContext('2d');
@@ -333,8 +314,11 @@
         ctx.stroke();
         if (!peaks || !peaks.length) return;
         ctx.fillStyle = '#9c9';
-        for (let x = 0; x < peaks.length && x < w; x++) {
-            const p = peaks[x];
+        // Map each pixel column to a peaks index by proportion, not 1:1 —
+        // peaks.length (always 128) essentially never equals canvas.width,
+        // so a naive index==pixel loop would squish/truncate the drawing.
+        for (let x = 0; x < w; x++) {
+            const p = peaks[Math.min(peaks.length - 1, Math.floor(x * peaks.length / w))];
             const y1 = mid - p.max * mid;
             const y2 = mid - p.min * mid;
             ctx.fillRect(x, y1, 1, Math.max(1, y2 - y1));
@@ -342,28 +326,30 @@
     }
 
     async function drawWaveform(canvas, filesystemPath) {
-        const cached = waveformCache.get(filesystemPath);
-        if (cached) { paintWaveform(canvas, cached); return; }
+        if (waveformCache.has(filesystemPath)) {
+            paintWaveform(canvas, waveformCache.get(filesystemPath));
+            return;
+        }
 
         paintWaveform(canvas, null);   // clear to the center-line placeholder while loading
         try {
-            const res = await fetch('/kit-builder/AUDIO/' + encodeURIComponent(filesystemPath));
-            const buf = await res.arrayBuffer();
+            const res = await fetch('/kit-builder/PEAKS/' + encodeURIComponent(filesystemPath));
+            const json = await res.json();
+            const peaks = (json && json.ok) ? json.peaks : null;
+            waveformCache.set(filesystemPath, peaks);
             // Every pad tile gets its own freshly-created <canvas> on each
             // render (renderGrid()/renderPadDetail() rebuild from scratch), so
-            // a canvas that's no longer attached by the time decode finishes
-            // means a newer render already replaced it — painting into it
-            // would be invisible anyway, just skip the wasted work.
+            // a canvas that's no longer attached by the time the fetch
+            // resolves means a newer render already replaced it — painting
+            // into it would be invisible anyway, just skip the wasted work.
             if (!canvas.isConnected) return;
-            const audioBuffer = await getAudioCtx().decodeAudioData(buf);
-            if (!canvas.isConnected) return;
-            const peaks = computePeaks(audioBuffer, canvas.width);
-            waveformCache.set(filesystemPath, peaks);
             paintWaveform(canvas, peaks);
         } catch (e) {
-            /* decode failure (unsupported format, truncated file) — leave the
-             * center-line placeholder rather than surfacing an error, this is
-             * a non-essential visualisation. */
+            /* network/parse failure — leave the center-line placeholder
+             * rather than surfacing an error; this is a non-essential
+             * visualisation. Deliberately NOT cached (unlike a server-
+             * confirmed null), since this might just be a transient network
+             * hiccup worth retrying on the next render. */
         }
     }
 
