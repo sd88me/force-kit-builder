@@ -1,8 +1,7 @@
 /*
  * Force Kit Builder — sample classification.
  *
- * Ported unchanged from schwung-kit-builder's src/core/sample_classifier.mjs
- * — this logic is entirely folder/filename based and has no Move-specific
+ * This logic is entirely folder/filename based and has no platform-specific
  * dependency at all.
  *
  * Pure module: no filesystem access. Unit-tested by tests/test_classifier.js.

@@ -1,11 +1,9 @@
 /*
  * Force Kit Builder — WAV sample-frame counting (MPC `.xpm` SliceEnd fix).
  *
- * Ported from schwung-kit-builder's src/core/wav_info.mjs. `wavFrameCount()`
- * is unchanged (pure bytes-in/number-out). `base64Decode()` is dropped — it
- * only existed because Move's `host_read_file_base64` was the one binary-safe
- * read primitive on that host; Node's `fs.readFileSync()` returns a real
- * `Buffer` directly, so callers (storage.mjs) just pass that straight in.
+ * `wavFrameCount()` is pure bytes-in/number-out. There's no base64 decode
+ * step here — Node's `fs.readFileSync()` returns a real `Buffer` directly,
+ * so callers (storage.mjs) just pass that straight in.
  *
  * The MPC `.xpm` reference kept its populated Layer-1 <SliceEnd> at the real
  * sample's frame count (33688, for a genuine 1-shot); a naive template

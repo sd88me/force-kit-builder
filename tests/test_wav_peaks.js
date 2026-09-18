@@ -1,7 +1,7 @@
 /*
- * New module (no Move equivalent): server-side WAV waveform peaks, used by
- * the web UI's per-pad and side-panel waveform preview instead of the
- * browser's decodeAudioData() — see wav_peaks.mjs's doc for why.
+ * Server-side WAV waveform peaks, used by the web UI's per-pad and
+ * side-panel waveform preview instead of the browser's decodeAudioData() —
+ * see wav_peaks.mjs's doc for why.
  */
 import { assert, eq } from './assert.js';
 import { wavPeaks } from '../core/wav_peaks.mjs';

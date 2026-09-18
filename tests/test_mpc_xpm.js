@@ -1,8 +1,5 @@
 /*
- * MPC .xpm export. Ported from schwung-kit-builder's tests/test_mpc_xpm.js
- * (import paths moved to ../core, ../exporters — every test already passed
- * an explicit `dir`, which is now required rather than optional, so no test
- * bodies needed to change).
+ * MPC .xpm export.
  */
 import { assert, eq } from './assert.js';
 import { createKit, sampleFromRecord } from '../core/kit_model.mjs';

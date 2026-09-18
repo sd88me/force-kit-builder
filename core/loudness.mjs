@@ -1,11 +1,9 @@
 /*
  * Force Kit Builder — automatic loudness matching.
  *
- * Ported unchanged (verbatim math) from schwung-kit-builder's
- * src/core/loudness.mjs. On Move, the per-pad RMS readings came from the
- * native DSP (`get_param("loudness")`); here they come from wav_rms.mjs
- * reading each pad's own WAV file directly (see that module's doc) — the
- * matching math itself doesn't care where the numbers came from.
+ * Per-pad RMS readings come from wav_rms.mjs, which reads each pad's own
+ * WAV file directly (see that module's doc) — the matching math itself
+ * doesn't care where the numbers came from.
  *
  * Pure module — the caller applies the returned gains to the kit model.
  */

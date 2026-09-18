@@ -1,9 +1,9 @@
 /*
  * Tiny assertion helpers shared by every test_*.js file.
  *
- * Split out from run.js (schwung-kit-builder's original test harness put
- * these directly in run.js and every test file imported them from there).
- * That created a circular import — run.js uses a top-level `await import()`
+ * Split out from run.js (an earlier version of this test harness put these
+ * directly in run.js and every test file imported them from there). That
+ * created a circular import — run.js uses a top-level `await import()`
  * to load each test file, and each test file statically imported `assert`/
  * `eq` back from run.js — which deadlocks on Node 20 as an "unsettled
  * top-level await" (process exit code 13, no output at all, no error

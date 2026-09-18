@@ -1,6 +1,5 @@
 /*
- * Scan-time sample filters. Ported unchanged from schwung-kit-builder's
- * tests/test_scan_filters.js (only the import path moved).
+ * Scan-time sample filters.
  */
 import { assert, eq } from './assert.js';
 import {

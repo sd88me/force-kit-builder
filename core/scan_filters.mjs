@@ -1,8 +1,7 @@
 /*
  * Force Kit Builder — scan-time sample filters.
  *
- * Ported unchanged from schwung-kit-builder's src/core/scan_filters.mjs
- * (originally adapted from github.com/klingklangmatze/drum-kit-generator).
+ * Originally adapted from github.com/klingklangmatze/drum-kit-generator.
  *
  * Two opt-in filters applied while the index is built, to avoid choking on
  * huge sample libraries:

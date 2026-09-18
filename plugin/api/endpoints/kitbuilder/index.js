@@ -16,10 +16,8 @@
  *
  * State model: one in-memory "current kit" + sample index + prefs, mutated
  * by each action and persisted to disk after every change (so a nodeServer
- * restart resumes where you left off) — the same working-file model
- * schwung-kit-builder used on Move, just backed by plain fs here instead of
- * QuickJS host_* shims. See DESIGN.md's "API" section for the full action
- * list and request/response shapes.
+ * restart resumes where you left off), backed by plain fs. See DESIGN.md's
+ * "API" section for the full action list and request/response shapes.
  */
 
 module.exports = { INIT };

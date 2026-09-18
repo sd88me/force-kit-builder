@@ -1,11 +1,10 @@
 /*
  * Force Kit Builder — internal kit data model.
  *
- * Ported from schwung-kit-builder's src/core/kit_model.mjs (Ableton Move).
- * Changes from the Move original: dropped `sample.ableton_uri` (no Move URI
- * scheme here) and the `source_mode`/user-core split (the Force has one
- * filesystem, not Move's User/Core library split) — `sample.source` is now
- * just a free-text label for whichever root folder the sample came from.
+ * There's no `sample.ableton_uri` field and no `source_mode`/user-core split
+ * here (the Force has one filesystem, not a fixed two-library split) —
+ * `sample.source` is just a free-text label for whichever root folder the
+ * sample came from.
  *
  * Pure module: no filesystem access here at all.
  */

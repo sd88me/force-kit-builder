@@ -1,9 +1,8 @@
 /*
  * Force Kit Builder — MPC .xpm export template.
  *
- * Copied byte-for-byte from schwung-kit-builder's src/exporters/xpm_template.mjs
- * — pure XML/JSON template data lifted from a real MPC-V 2.1 drum program
- * (File_Version 2.1, Application MPC-V 2.14.0.20), with no Move/Ableton
+ * Pure XML/JSON template data lifted from a real MPC-V 2.1 drum program
+ * (File_Version 2.1, Application MPC-V 2.14.0.20), with no platform-specific
  * dependency at all. Method per github.com/psrpinto/roger: keep the program
  * byte-for-byte and only swap <ProgramName> and each used pad's Layer-1
  * <SampleName> / <SliceEnd>.

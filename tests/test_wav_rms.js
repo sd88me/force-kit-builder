@@ -1,6 +1,6 @@
 /*
- * New module (no Move equivalent): server-side WAV RMS measurement used by
- * "Match Levels" in place of Move's native DSP loudness readings.
+ * Server-side WAV RMS measurement used by "Match Levels" — no native DSP
+ * here, so this is how a pad's loudness gets measured.
  */
 import { assert, eq } from './assert.js';
 import { wavRms } from '../core/wav_rms.mjs';

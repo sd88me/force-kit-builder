@@ -110,8 +110,13 @@ No build step for the web UI — `plugin/api/endpoints/kitbuilder/{client.js,
 style.css,template.html}` are served as-is by the endpoint, same as the rest
 of nodeServer's own tools.
 
+## License
+
+MIT — see [LICENSE](./LICENSE).
+
 ## Credits
 
 The kit-building engine — sample classification, random assignment, loudness
-matching, and the MPC `.xpm` export — originated in the `schwung` module
-ecosystem and was ported here to run as a standalone browser UI on the Force.
+matching, and the MPC `.xpm` export — originated in
+[schwung-kit-builder](https://github.com/sd88me/schwung-kit-builder) and was
+ported here to run as a browser UI on the Force.

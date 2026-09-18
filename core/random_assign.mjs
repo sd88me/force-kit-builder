@@ -1,13 +1,11 @@
 /*
  * Force Kit Builder — seeded random assignment engine.
  *
- * Ported from schwung-kit-builder's src/core/random_assign.mjs. The only
- * change from the Move original is the `source` filter: Move had a fixed
- * User/Core library split, so `source` was `'user' | 'core' | 'both'`. The
- * Force has an arbitrary number of user-selected root folders instead, so
- * `source` here is either omitted/`'all'` (no filter — draw from every
- * scanned root) or one exact root label (as stamped on each index record by
- * sample_index.mjs, normally the root folder's own absolute path).
+ * The Force has an arbitrary number of user-selected root folders (not a
+ * fixed two-library split), so `source` here is either omitted/`'all'` (no
+ * filter — draw from every scanned root) or one exact root label (as
+ * stamped on each index record by sample_index.mjs, normally the root
+ * folder's own absolute path).
  *
  * Pure module: no filesystem access. Never mutates the input kit — returns a
  * proposed pad array plus a report; the caller commits it as a transaction.

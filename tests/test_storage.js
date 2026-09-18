@@ -1,10 +1,8 @@
 /*
  * Storage: atomic writes, kit save/load round-trip, prefs, sanitisation.
  *
- * Unlike schwung-kit-builder's tests/test_storage.js (which injected an
- * in-memory fs to stand in for QuickJS's host_* shims), this port's
  * storage.mjs talks to plain Node fs directly, so this test exercises it
- * against a real scratch directory under os.tmpdir() instead.
+ * against a real scratch directory under os.tmpdir().
  */
 import fs from 'node:fs';
 import os from 'node:os';

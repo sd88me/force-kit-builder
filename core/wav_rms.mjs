@@ -1,10 +1,8 @@
 /*
  * Force Kit Builder — server-side WAV loudness (RMS) measurement.
  *
- * New module — this port's replacement for what schwung-kit-builder's
- * loudness.mjs got for free from Move's native DSP (`get_param("loudness")`,
- * a peak-window RMS reading per loaded slot). There's no DSP here, so
- * "Match Levels" needs its own measurement: this reads each pad's own WAV
+ * loudness.mjs needs a real loudness reading per pad to work from. There's
+ * no native DSP here to get one for free, so this reads each pad's own WAV
  * file directly (via wav_info.mjs's chunk walker) and computes RMS as a
  * fraction of full scale, entirely server-side in Node — no Web Audio API,
  * no browser round-trip, works headless exactly like the rest of this addon.
@@ -13,7 +11,7 @@
  * libraries actually use: 8-bit unsigned, 16/24/32-bit signed integer, and
  * 32-bit float. Anything else (compressed formats, a shape wavChunks() can't
  * parse) returns null — the caller (storage/loudness call site) leaves that
- * pad's gain at 1.0, same as an unmeasurable pad on the Move original.
+ * pad's gain at 1.0 for an unmeasurable sample.
  */
 
 import { wavChunks } from './wav_info.mjs';

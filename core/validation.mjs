@@ -1,10 +1,7 @@
 /*
  * Force Kit Builder — kit schema validation.
  *
- * Ported from schwung-kit-builder's src/core/validation.mjs. `application`
- * is now 'force-kit-builder' instead of 'kit-builder' — everything else is
- * unchanged (the pad shape didn't change other than dropping ableton_uri,
- * which this validator never checked).
+ * `application` is `'force-kit-builder'`.
  *
  * Pure module. Returns null when a parsed kit document is structurally valid,
  * or a short human-readable reason string when it is not. Extra/unknown

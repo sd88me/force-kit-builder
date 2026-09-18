@@ -1,12 +1,9 @@
 # Force Kit Builder — design
 
-A web-based drum-kit builder for the Akai Force running MockbaMod. Ports
-[schwung-kit-builder](https://github.com/) (the Ableton Move "Schwung"
-overtake module for building 16-pad drum kits from a sample library) to the
-Force — keeping the kit-building engine, dropping every Ableton/Move preset
-format, keeping only Akai MPC `.xpm` export written directly to the Force's
-own local disk, and replacing the on-device hardware-button UI entirely with
-a browser UI shaped like a 16-pad grid.
+A web-based drum-kit builder for the Akai Force running MockbaMod — keeping
+only Akai MPC `.xpm` export written directly to the Force's own local disk,
+and replacing any on-device hardware-button UI entirely with a browser UI
+shaped like a 16-pad grid.
 
 ## Architecture: a nodeServer module, not a standalone addon
 
@@ -72,38 +69,40 @@ just patches in a full feature instead of a one-line redirect stub.
 config) is created on first use and is never touched by a re-run of
 `install.sh` — only `core/` and `exporters/` get replaced on an upgrade.
 
-## What ported, what got cut
+## Module overview
 
-schwung-kit-builder's `src/core/*.mjs` were already written as "pure modules"
-— no `os`/`host_*` QuickJS shims baked into the actual logic, host access
-injected by the caller — which made most of them port over close to
-verbatim:
+The `core/*.mjs` modules are written as "pure modules" — no host-specific
+shims baked into the actual logic, host access injected by the caller —
+which keeps them small and easy to test in isolation:
 
-| Module | Fate |
+| Module | Notes |
 |---|---|
-| `kit_model.mjs` | Ported. Dropped `sample.ableton_uri` and the `source: 'user'\|'core'` binary — no Move URI scheme, no fixed two-library split here. `sample.source` is now a free-text label (the root folder path it came from). |
-| `sample_classifier.mjs` | Ported verbatim — the 22-category folder/filename classifier has zero Move dependency. |
-| `random_assign.mjs` | Ported. The `source` filter changed from `'user'\|'core'\|'both'` to "an exact root-folder path, or `'all'`/omitted for no filter" — see `bucketByRole()`'s doc. |
-| `scan_filters.mjs` | Ported verbatim. |
-| `sample_index.mjs` | Ported. QuickJS `os.stat`/`os.readdir`/`host_*` replaced with plain Node `fs`. `sample_roots: {user, core}` replaced with `sample_roots: string[]` — an arbitrary, user-picked list of folders. `toAbletonUri` removed entirely. |
-| `storage.mjs` | Ported. QuickJS shims replaced with `fs`. `exportMrDrums()` and the entire SSH "push to Force" subsystem (`ensureForceKey`, `pushKitToForce`, vendored dropbear binaries) are gone — moot once the tool *is* the Force. `wav_strip.mjs`'s copy-time WAV-metadata stripping is gone too — it only existed to shrink a lossy string-round-trip copy path on Move; `fs.copyFileSync` here is an exact byte-for-byte copy with nothing to strip. |
-| `loudness.mjs` | Ported verbatim (pure math). |
-| `wav_info.mjs` | Ported. `base64Decode()` dropped — it only existed because Move's `host_read_file_base64` was the one binary-safe read primitive on that host; `fs.readFileSync()` returns a real `Buffer` directly, no round-trip needed. |
-| `wav_rms.mjs` | **New.** Move's loudness readings came from the native DSP (`get_param("loudness")`); there's no DSP here, so this reads each pad's own WAV file directly and computes RMS server-side in Node — no Web Audio, no browser round-trip, fully headless. |
-| `validation.mjs` | Ported (just `application: 'force-kit-builder'` instead of `'kit-builder'`). |
-| `exporters/mpc_xpm.mjs` | Ported. The one real change: `MPC_EXPORT_ROOT` (a hardcoded Move path default) is gone — `opts.dir` is now **required**. See "Open item" below for why. |
-| `exporters/xpm_template.mjs` | Copied byte-for-byte — pure XML/JSON template data, zero Move dependency to begin with. |
-| `exporters/mrdrums_json.mjs` | **Cut entirely.** Ableton drum-rack (`.ablpreset`) export — the format this port explicitly drops. |
-| `path_mapping.mjs` | **Cut entirely.** The `ableton:/user-library/...` URI scheme has no Force equivalent. |
-| `src/dsp/kit_player.c` + native plugin ABI | **Cut entirely.** Move's native-plugin sample-audition player. A browser can audition samples trivially via `<audio>` hitting a streaming endpoint — no native code needed. |
-| `src/vendor/dropbear-aarch64/` | **Cut entirely.** The SSH-push binaries, moot per above. |
-| `src/ui.js` (2019 lines) | **Cut entirely.** Move-hardware-specific (pad MIDI/jog-wheel/Shift-Back-Rec-Play semantics, RGB LED painting, on-screen keyboard, `overtake` module lifecycle). Only the *actions it orchestrated* — Assign/Clear/Unlock All/Save/Rescan/reroll-one-pad/reject/favourite/Match Levels/Export — are the reusable contract; the web UI re-implements calls to the same core modules. |
-| `src/module.json` | Replaced by nodeServer's own `ENDPOINTS.js` entry — no Schwung/Overtake manifest concept applies here. |
+| `kit_model.mjs` | No `sample.ableton_uri` field and no fixed two-library `source` split — `sample.source` is a free-text label (the root folder path it came from). |
+| `sample_classifier.mjs` | The 22-category folder/filename classifier has zero platform dependency. |
+| `random_assign.mjs` | `source` is either an exact root-folder path, or `'all'`/omitted for no filter — see `bucketByRole()`'s doc. |
+| `scan_filters.mjs` | Two opt-in filters (skip-loops, max-size) applied while the sample index is built. |
+| `sample_index.mjs` | Plain Node `fs`. `sample_roots: string[]` — an arbitrary, user-picked list of folders. No URI-scheme concept anywhere in this data model. |
+| `storage.mjs` | Plain Node `fs`. Only the MPC `.xpm` exporter exists here (no other preset export path). No SSH-push-to-device subsystem — moot once the tool *is* the Force. |
+| `loudness.mjs` | Pure math — attenuate-only gain matching from a set of loudness readings. |
+| `wav_info.mjs` | `fs.readFileSync()` returns a real `Buffer` directly, so there's no base64 round-trip needed anywhere in this pipeline. |
+| `wav_rms.mjs` | Reads each pad's own WAV file directly and computes RMS server-side in Node — no Web Audio, no browser round-trip, fully headless. |
+| `validation.mjs` | `application: 'force-kit-builder'`. |
+| `exporters/mpc_xpm.mjs` | `opts.dir` is **required**, never defaulted inside this module. See "Export destination" below for why. |
+| `exporters/xpm_template.mjs` | Pure XML/JSON template data lifted from a real MPC-V 2.1 drum program. |
+
+**Explicitly not part of this project**: any other preset/rack export format
+(this port is XPM-only by design), an SSH-push-to-device transfer step
+(moot — the tool runs natively on the Force), a native sample-audition
+player (a browser can audition samples trivially via `<audio>` hitting a
+streaming endpoint), and any on-device hardware-button/touchscreen control
+path — only the *actions* a hardware UI would orchestrate (Assign, Clear,
+Unlock All, Save, Rescan, reroll one pad, reject/favourite, Match Levels,
+Export) are the reusable contract; the web UI calls the same core modules
+those actions would have called.
 
 ## Data model
 
-A kit is 16 pads, unchanged in shape from the Move original except for the
-`ableton_uri`/`source` changes noted above:
+A kit is 16 pads:
 
 ```js
 {
@@ -127,35 +126,32 @@ Each pad:
 
 23 flat categories (`kick snare rim clap hat closed_hat open_hat tom conga
 percussion crash ride cymbal fx glitch vox bass synth stab chord lead pad
-other`) — `glitch` (aliases: `glitch`, `glitches`, `glitchy`, `grain`,
-`grains`, `granular`) was split off `fx` (which used to also claim
-`glitch`/`glitches` before `buildAliasIndex()`'s first-writer-wins rule made
-that ambiguous) as its own category, added after this project's initial
-build. It has no dedicated pad slot, so — like every other unslotted category
-— it falls into pads 13-16's catch-all pool automatically via
-`random_assign.mjs`'s `otherPoolCats()`, and into the SYSTEM status panel's
-"Other" line automatically via `sample_index.mjs`'s `summarize()` (neither
-needed a code change beyond adding the category itself; that's the payoff of
-those two functions computing "everything not explicitly slotted" instead of
-a fixed list).
-classified by folder path (deepest match wins) with a filename-token fallback
-when the folder yields nothing. Each of the 16 pads draws from a **union** of
-one or more categories (`pad_layout`); pad 12 is always `fx`, pads 13–16 are
-a sentinel that expands to every category with no dedicated slot plus `fx`.
-This is unchanged from the Move original — see `core/sample_classifier.mjs`
-and `core/sample_index.mjs`'s `DEFAULT_CONFIG.role_rules`/`pad_layout` for
-the full vocabulary.
+other`), classified by folder path (deepest match wins) with a
+filename-token fallback when the folder yields nothing. `glitch` (aliases:
+`glitch`, `glitches`, `glitchy`, `grain`, `grains`, `granular`) was split off
+`fx` (which used to also claim `glitch`/`glitches` before
+`buildAliasIndex()`'s first-writer-wins rule made that ambiguous) as its own
+category, added after this project's initial build. It has no dedicated pad
+slot, so — like every other unslotted category — it falls into pads 13-16's
+catch-all pool automatically via `random_assign.mjs`'s `otherPoolCats()`, and
+into the SYSTEM status panel's "Other" line automatically via
+`sample_index.mjs`'s `summarize()` (neither needed a code change beyond
+adding the category itself; that's the payoff of those two functions
+computing "everything not explicitly slotted" instead of a fixed list).
 
-**Per-pad pool picker** (the web UI's one new interactive feature over the
-Move original's fixed layout): each pad tile has a dropdown letting you pick
-a single category to override that pad's pool. This writes to
-`config.pad_layout[pad]` via `storage.savePadLayoutEntry()` — config-wide
-(like the Move original), not per-kit: it changes which pool that pad slot
-draws from for every future Assign/Reroll, on any kit, until changed again.
+Each of the 16 pads draws from a **union** of one or more categories
+(`pad_layout`); pad 12 is always `fx`, pads 13–16 are a sentinel that expands
+to every category with no dedicated slot plus `fx`. See
+`core/sample_classifier.mjs` and `core/sample_index.mjs`'s
+`DEFAULT_CONFIG.role_rules`/`pad_layout` for the full vocabulary.
+
+**Per-pad pool picker**: each pad tile has a dropdown letting you pick a
+single category to override that pad's pool. This writes to
+`config.pad_layout[pad]` via `storage.savePadLayoutEntry()` — config-wide,
+not per-kit: it changes which pool that pad slot draws from for every future
+Assign/Reroll, on any kit, until changed again.
 
 ## Lock / reject / favourite
-
-Unchanged semantics from the Move original:
 
 - **Lock** (per-pad, part of the kit itself): excluded from Assign and Clear,
   keeps its sample across a rescan, counts as "already used" for
@@ -179,8 +175,8 @@ are set.
 
 **The single most load-bearing fact in this exporter**: `<SliceStart>0</
 SliceStart>` + `<SliceEnd>0</SliceEnd>` is a zero-length region and plays
-**silence on real Akai Force hardware** (confirmed on hardware during the
-original Move project) — so every assigned pad's `SliceEnd` must be set to
+**silence on real Akai Force hardware** (confirmed on hardware) — so every
+assigned pad's `SliceEnd` must be set to
 the sample's real PCM frame count, computed by `wav_info.mjs`'s WAV-chunk
 walker. This must survive any future rewrite of this exporter.
 
@@ -376,9 +372,8 @@ one pad re-rendered).
 - Ableton `.ablpreset`/MrDrums export (the whole point of this port is
   XPM-only).
 - The SSH "send to Force" push — moot, this *is* the Force.
-- The Move original's post-MVP step-sequencer/pattern-audition page (E2) —
-  it was already flagged post-MVP on the Move project too; nothing about
-  this port changes that judgment.
+- A step-sequencer/pattern-audition page — flagged as a later-phase feature,
+  not part of this version.
 - Any hardware-button/on-device-GUI control path at all.
 
 ## Testing
@@ -473,26 +468,23 @@ afterward via `NEW_KIT` so the device wasn't left mid-test.
 
 ## Judgment calls worth knowing about
 
-- **Test-harness circular import bug, fixed upstream of Move too**:
-  schwung-kit-builder's `tests/run.js` put `assert`/`eq` directly in itself,
-  and every `test_*.js` imported them back from `run.js` — a circular import
-  between an async (top-level-`await`) module and its own dynamically
-  imported children. This deadlocks on Node 20 (`process.exit(13)`,
-  "unsettled top-level await", with **zero output**, no error message at
-  all — it took real effort to track down). Fixed here by moving `assert`/
-  `eq` into their own dependency-free `tests/assert.js`. Worth back-porting
-  to schwung-kit-builder itself if its own test suite is ever run on a
-  Node version newer than whatever it was last verified against.
-- **`SET_POOL` is a new action** with no Move equivalent — the Move UI never
-  exposed pad-pool reassignment as an interactive control; it lived in
-  `kit_config.json`, edited by hand. Making it "selectable on the pad" was
-  an explicit ask for this port.
-- **`wav_rms.mjs` RMS is over the whole sample**, not a peak-window RMS like
-  Move's native DSP produced — good enough for the attenuate-only relative
-  ranking `loudness.mjs`'s `matchGains()` needs, not a broadcast-accurate
-  loudness measurement. Revisit if that distinction ever matters.
-- **No per-kit pool overrides** — `SET_POOL` is config-wide like the Move
-  original's `pad_layout`, not stored on the kit document itself. If a
+- **Test-harness circular import bug**: an earlier version of `tests/run.js`
+  put `assert`/`eq` directly in itself, and every `test_*.js` imported them
+  back from `run.js` — a circular import between an async (top-level-`await`)
+  module and its own dynamically imported children. This deadlocks on Node 20
+  (`process.exit(13)`, "unsettled top-level await", with **zero output**, no
+  error message at all — it took real effort to track down). Fixed here by
+  moving `assert`/`eq` into their own dependency-free `tests/assert.js`.
+- **`SET_POOL` is a new action** — pad-pool reassignment wasn't previously
+  exposed as an interactive control; it lived only in on-disk config, edited
+  by hand. Making it "selectable on the pad" was an explicit ask for this
+  version.
+- **`wav_rms.mjs` RMS is over the whole sample**, not a peak-window RMS —
+  good enough for the attenuate-only relative ranking `loudness.mjs`'s
+  `matchGains()` needs, not a broadcast-accurate loudness measurement.
+  Revisit if that distinction ever matters.
+- **No per-kit pool overrides** — `SET_POOL` is config-wide, not stored on
+  the kit document itself. If a
   future version wants "this kit's pad 6 is always crash, but other kits
   aren't," that's a data-model change, not a bug fix.
 - **Imported pads always get gain 1.0** — see "Loading an existing .xpm"

@@ -1,7 +1,6 @@
 /*
- * Automatic loudness matching. Ported unchanged from schwung-kit-builder's
- * tests/test_loudness.js (only the import path moved) — the matching math
- * doesn't care whether the readings came from Move's DSP or wav_rms.mjs.
+ * Automatic loudness matching — the matching math doesn't care where the
+ * loudness readings came from, only that they're comparable numbers.
  */
 import { assert, eq } from './assert.js';
 import { parseLoudness, matchGains } from '../core/loudness.mjs';

@@ -2,30 +2,20 @@
  * Force Kit Builder — storage: working kit JSON, atomic-ish writes, load +
  * validate, kit-name generation, preferences.
  *
- * Ported from schwung-kit-builder's src/core/storage.mjs. Substantial
- * changes from the Move original:
- *   - QuickJS `host_*` shims replaced with plain Node `fs` sync calls. This
- *     also removes the base64 binary-safety hazard the Move version had to
- *     work around (`host_read_file` UTF-8-decoded raw bytes and corrupted
- *     audio; `fs.readFileSync` returns a real Buffer, so `wav_rms.mjs`/
- *     `wav_info.mjs` just read it directly — no encoding round-trip at all).
- *   - `exportMrDrums()` / the entire Ableton drum-rack (.ablpreset) export
- *     path is gone — this port keeps only the MPC `.xpm` exporter.
- *   - The "Send to Force" SSH-push subsystem (`ensureForceKey`,
- *     `pushKitToForce`, the vendored dropbear binaries) is gone entirely —
- *     it existed to get a kit *off* Move *onto* a Force over the network;
- *     moot once the tool runs natively on the Force and writes XPMs
- *     straight to local disk.
- *   - `exportMpcXpm(kit, name, destDir)` now takes the destination directory
- *     as a required argument instead of a hardcoded `MPC_EXPORT_ROOT` Move
- *     path — the web UI's destination-folder picker supplies it. See
- *     DESIGN.md's open item: which on-disk location the Force's own Program
- *     browser expects XPM kits in is NOT YET CONFIRMED on real hardware, so
- *     this deliberately has no baked-in "correct" default to fall back on.
- *   - `wav_strip.mjs`'s WAV-metadata-stripping-on-copy optimization is
- *     dropped — it only existed to shrink a lossy string round-trip copy on
- *     Move; `fs.copyFileSync` here is an exact byte-for-byte copy with
- *     nothing to strip.
+ * Plain Node `fs` sync calls throughout — no host-shim layer to abstract, and
+ * no base64 binary-safety hazard to work around: `fs.readFileSync` returns a
+ * real Buffer directly, so `wav_rms.mjs`/`wav_info.mjs` just read it — no
+ * encoding round-trip at all. Keeps only the MPC `.xpm` exporter (no Ableton
+ * drum-rack `.ablpreset` export path here). There is no SSH-push-to-device
+ * subsystem — moot once the tool runs natively on the Force and writes XPMs
+ * straight to local disk. `exportMpcXpm(kit, name, destDir)` takes the
+ * destination directory as a required argument rather than a hardcoded
+ * default path — the web UI's destination-folder picker supplies it. See
+ * DESIGN.md's open item: which on-disk location the Force's own Program
+ * browser expects XPM kits in is NOT YET CONFIRMED on real hardware, so this
+ * deliberately has no baked-in "correct" default to fall back on.
+ * `fs.copyFileSync` here is an exact byte-for-byte copy with no
+ * metadata-stripping step needed.
  */
 
 import fs from 'node:fs';
@@ -122,8 +112,8 @@ export function saveSampleRoots(roots) {
 
 /*
  * Override which categories one pad slot draws from — this is what the web
- * UI's per-pad pool picker writes to. Config-wide (like the Move original's
- * pad_layout), not per-kit: it changes which pool that pad slot pulls from
+ * UI's per-pad pool picker writes to. Config-wide, not per-kit: it changes
+ * which pool that pad slot pulls from
  * for every future Assign/Reroll, on any kit, until changed again.
  */
 export function savePadLayoutEntry(padIndex, categories) {

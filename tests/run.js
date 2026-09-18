@@ -3,9 +3,8 @@
  * Each test file exports an array of { name, fn } or a default function that
  * throws on failure.
  *
- * Adapted from schwung-kit-builder's tests/run.js: `assert`/`eq` moved out to
- * assert.js to break a circular-import deadlock (see that file's doc) —
- * otherwise unchanged.
+ * `assert`/`eq` live in assert.js to break a circular-import deadlock (see
+ * that file's doc).
  */
 import { pathToFileURL } from 'node:url';
 import { readdirSync } from 'node:fs';

@@ -1,13 +1,11 @@
 /*
  * Force Kit Builder — Akai MPC .xpm export
  *
- * Ported from schwung-kit-builder's src/exporters/mpc_xpm.mjs. This module
- * was already host-agnostic on Move (pure module, caller injects
- * write/mkdir/copy/frameCount) so the export logic itself is unchanged. The
- * one real change: the Move original defaulted `opts.dir` to a hardcoded
- * `MPC_EXPORT_ROOT` Move path when the caller omitted it. That constant is
- * gone — `opts.dir` is still REQUIRED here, never defaulted inside this
- * module. Confirmed live over SSH on 2026-09-18 (see DESIGN.md): the Force's
+ * This is a pure module (caller injects write/mkdir/copy/frameCount), so the
+ * export logic itself needs no host-specific plumbing. `opts.dir` is
+ * REQUIRED and never defaulted inside this module — an earlier version of
+ * this exporter defaulted it to a hardcoded export-root path, which is gone
+ * now. Confirmed live over SSH on 2026-09-18 (see DESIGN.md): the Force's
  * own factory expansion kits live flat under
  * `/media/az01-internal-sd/Expansions/Kits & Patterns/`, `.xpm` sitting
  * directly beside its `.wav` samples, no manifest/registration needed — so

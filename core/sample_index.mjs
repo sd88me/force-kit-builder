@@ -2,22 +2,15 @@
  * Force Kit Builder — sample index: recursive sample-folder scan,
  * classification, cached index file.
  *
- * Ported from schwung-kit-builder's src/core/sample_index.mjs (Ableton Move
- * QuickJS host). Changes from the Move original:
- *   - `os.stat`/`os.readdir`/`host_read_file`/`host_write_file`/`host_ensure_dir`
- *     (QuickJS host shims) replaced with plain Node `fs` sync calls — this
- *     runs inside nodeServer's own Node process, so there's no host shim
- *     layer to abstract.
- *   - `sample_roots: { user, core }` (Move's fixed two-library split)
- *     replaced with `sample_roots: string[]` — an arbitrary, user-selected
- *     list of folders (picked via the file-browser widget in the web UI).
- *     Each record's `source` is stamped with the *root path itself* (not a
- *     'user'/'core' tag), so random_assign's per-root filter still works.
- *   - `toAbletonUri` (Move URI scheme) removed entirely — `sample.ableton_uri`
- *     doesn't exist in this port's data model (see kit_model.mjs).
- *   - The data directory (KB_DIR and friends) is no longer a hardcoded Move
- *     path — call `configureDataDir(dir)` once at startup (the plugin's
- *     index.js does this, pointing at a folder inside its own install).
+ * Plain Node `fs` sync calls throughout — this runs inside nodeServer's own
+ * Node process, so there's no host-shim layer to abstract. `sample_roots` is
+ * `string[]` — an arbitrary, user-selected list of folders (picked via the
+ * file-browser widget in the web UI). Each record's `source` is stamped
+ * with the *root path itself* (not a fixed library tag), so random_assign's
+ * per-root filter still works. There's no `sample.ableton_uri` field in this
+ * data model (see kit_model.mjs). The data directory (KB_DIR and friends) is
+ * not a hardcoded path — call `configureDataDir(dir)` once at startup (the
+ * plugin's index.js does this, pointing at a folder inside its own install).
  *
  * The chunked step(budget) scanner is kept even though Node has no UI thread
  * to protect — nodeServer is a single-threaded process serving every other

@@ -1,6 +1,5 @@
 /*
- * Folder-role classification. Ported unchanged from schwung-kit-builder's
- * tests/test_classifier.js (only the import paths moved).
+ * Folder-role classification.
  */
 import { assert, eq } from './assert.js';
 import {

@@ -1,10 +1,9 @@
 /*
  * WAV frame counting (fixes the MPC .xpm SliceEnd bug — a pad with
  * SliceStart 0 / SliceEnd 0 is a zero-length region and played silence on a
- * real Akai Force). Ported from schwung-kit-builder's tests/test_wav_info.js;
- * the base64Decode() tests are dropped since that function no longer exists
- * in this port (Node's fs.readFileSync needs no base64 round-trip — see
- * core/wav_info.mjs's doc).
+ * real Akai Force). No base64Decode() tests here since that function doesn't
+ * exist in this codebase (Node's fs.readFileSync needs no base64 round-trip
+ * — see core/wav_info.mjs's doc).
  */
 import { assert, eq } from './assert.js';
 import { wavFrameCount } from '../core/wav_info.mjs';

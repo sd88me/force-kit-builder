@@ -1,13 +1,10 @@
 /*
- * Seeded random assignment engine. Ported from schwung-kit-builder's
- * tests/test_assignment.js. Each pad draws from a UNION of categories
- * (config.pad_layout); no fallback_roles.
+ * Seeded random assignment engine. Each pad draws from a UNION of
+ * categories (config.pad_layout); no fallback_roles.
  *
- * One test is adapted rather than ported verbatim: "source filter restricts
- * picks to the chosen library" used Move's fixed 'user'/'core'/'both' source
- * enum; this port has no such split (see core/random_assign.mjs's doc), so
- * the test now uses two arbitrary root-folder labels and 'all' in place of
- * 'both'. Every other test is unchanged (just the import paths moved).
+ * The "source filter restricts picks to the chosen library" test uses two
+ * arbitrary root-folder labels and 'all' as the no-filter case (see
+ * core/random_assign.mjs's doc for the source-filter semantics).
  */
 import { assert, eq } from './assert.js';
 import { createKit } from '../core/kit_model.mjs';
