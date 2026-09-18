@@ -1,0 +1,269 @@
+#kb-app {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px;
+    max-width: 1100px;
+    margin: 0 auto;
+    color: #eee;
+}
+
+#kb-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    background: #2a2a2a;
+    padding: 8px 10px;
+    border-radius: 8px;
+}
+
+#kb-toolbar input[type=text] {
+    padding: 6px 8px;
+    border-radius: 4px;
+    border: 1px solid #555;
+    background: #1a1a1a;
+    color: #eee;
+    min-width: 180px;
+}
+
+#kb-toolbar button {
+    padding: 6px 10px;
+    border-radius: 4px;
+    border: 1px solid #555;
+    background: #3a3a3a;
+    color: #eee;
+    cursor: pointer;
+}
+
+#kb-toolbar button:hover { background: #484848; }
+#kb-toolbar button:active { background: #222; }
+
+.kb-inline { display: flex; align-items: center; gap: 4px; font-size: 0.85rem; }
+.kb-spacer { flex: 1; }
+.kb-status { font-size: 0.85rem; color: #9c9; min-height: 1.2em; }
+.kb-status.kb-error { color: #e77; }
+.kb-muted { color: #999; font-size: 0.85rem; }
+
+#kb-main {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    align-items: flex-start;
+}
+
+#kb-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    width: 560px;
+    max-width: 100%;
+}
+
+.kb-pad {
+    position: relative;
+    aspect-ratio: 1 / 1;
+    border-radius: 10px;
+    background: #333;
+    border: 3px solid #222;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    cursor: pointer;
+    user-select: none;
+    transition: transform 0.05s ease, background 0.15s ease;
+}
+
+.kb-pad:active { transform: scale(0.97); }
+.kb-pad.kb-selected { border-color: #6cf; }
+.kb-pad.kb-empty { background: #262626; }
+.kb-pad.kb-locked { border-color: #eee; }
+.kb-pad.kb-missing { border-color: #e33; }
+.kb-pad.kb-sounding { background: #555; }
+
+.kb-pad-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    font-size: 0.7rem;
+}
+
+.kb-pad-num { color: #bbb; font-weight: bold; }
+
+.kb-pad-icons { display: flex; gap: 4px; }
+.kb-pad-icons button {
+    background: rgba(0,0,0,0.35);
+    border: none;
+    color: #ccc;
+    border-radius: 3px;
+    width: 20px;
+    height: 20px;
+    line-height: 1;
+    cursor: pointer;
+    font-size: 0.75rem;
+}
+.kb-pad-icons button.kb-on { color: #ffd24d; background: rgba(0,0,0,0.6); }
+.kb-pad-icons button.kb-reject-on { color: #ff6b6b; }
+
+.kb-pad-pool {
+    font-size: 0.65rem;
+    width: 100%;
+    background: rgba(0,0,0,0.3);
+    color: #ddd;
+    border: none;
+    border-radius: 3px;
+    padding: 2px;
+}
+
+.kb-pad-sample {
+    font-size: 0.72rem;
+    line-height: 1.15;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #fff;
+}
+
+/* Category colour coding — loosely mirrors MPC pad-colour conventions. */
+.kb-cat-kick, .kb-cat-snare, .kb-cat-rim, .kb-cat-clap { background: #7a3b3b; }
+.kb-cat-hat, .kb-cat-closed_hat, .kb-cat-open_hat { background: #7a6a2f; }
+.kb-cat-tom, .kb-cat-conga, .kb-cat-percussion { background: #3b6b4f; }
+.kb-cat-crash, .kb-cat-ride, .kb-cat-cymbal { background: #3b5a7a; }
+.kb-cat-fx { background: #6b3b7a; }
+.kb-cat-vox, .kb-cat-bass, .kb-cat-synth, .kb-cat-stab,
+.kb-cat-chord, .kb-cat-lead, .kb-cat-pad, .kb-cat-other { background: #555; }
+
+#kb-side {
+    flex: 1;
+    min-width: 280px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+#kb-side section {
+    background: #2a2a2a;
+    border-radius: 8px;
+    padding: 10px 12px;
+}
+
+#kb-side h3 {
+    margin: 0 0 8px 0;
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #aaa;
+}
+
+#kb-pad-detail-body label { display: block; font-size: 0.8rem; margin-top: 6px; }
+#kb-pad-detail-body input[type=range] { width: 100%; }
+#kb-pad-detail-body .kb-row { display: flex; gap: 6px; margin-top: 6px; }
+#kb-pad-detail-body button { flex: 1; padding: 4px; }
+
+#kb-roots { list-style: none; margin: 0 0 8px 0; padding: 0; }
+#kb-roots li {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #1e1e1e;
+    padding: 4px 8px;
+    border-radius: 4px;
+    margin-bottom: 4px;
+    font-size: 0.8rem;
+    word-break: break-all;
+}
+#kb-roots li button { margin-left: 6px; }
+
+.kb-scanfilters { display: flex; gap: 12px; margin: 8px 0; flex-wrap: wrap; }
+
+.kb-path {
+    background: #1e1e1e;
+    padding: 6px 8px;
+    border-radius: 4px;
+    font-size: 0.78rem;
+    word-break: break-all;
+    margin-bottom: 6px;
+}
+
+#kb-side button, #kb-side select {
+    padding: 5px 8px;
+    border-radius: 4px;
+    border: 1px solid #555;
+    background: #3a3a3a;
+    color: #eee;
+    cursor: pointer;
+    margin-top: 4px;
+}
+
+.kb-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+.kb-hidden { display: none; }
+
+.kb-modal-box {
+    background: #2a2a2a;
+    color: #eee;
+    width: 90%;
+    max-width: 520px;
+    max-height: 80vh;
+    border-radius: 8px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+}
+
+.kb-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+.kb-modal-header button {
+    background: none;
+    border: none;
+    color: #eee;
+    font-size: 1.2rem;
+    cursor: pointer;
+}
+
+.kb-browser-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    overflow-y: auto;
+    flex: 1;
+    max-height: 50vh;
+}
+.kb-browser-list li {
+    padding: 6px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+.kb-browser-list li:hover { background: #3a3a3a; }
+
+.kb-modal-footer {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+.kb-modal-footer button {
+    flex: 1;
+    padding: 6px;
+    border-radius: 4px;
+    border: 1px solid #555;
+    background: #3a3a3a;
+    color: #eee;
+    cursor: pointer;
+}
+
+@media (max-width: 700px) {
+    #kb-grid { width: 100%; }
+    #kb-main { flex-direction: column; }
+}

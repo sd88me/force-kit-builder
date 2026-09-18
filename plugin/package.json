@@ -1,0 +1,4 @@
+{
+  "type": "commonjs",
+  "_comment": "This marker is for local syntax-checking only (node --check) and is NOT copied by install.sh. It exists because the repo root's package.json declares \"type\": \"module\" for the ESM core/exporters/tests, but plugin/api/endpoints/kitbuilder/index.js is deliberately CommonJS (module.exports/require) to match nodeServer's own endpoint convention — this file makes that the nearest package.json for that subtree so Node parses it correctly both here and once installed inside nodeServer's own CommonJS tree."
+}

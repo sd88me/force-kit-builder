@@ -1,0 +1,11 @@
+{
+  "name": "force-kit-builder",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Web-based drum kit builder for the Akai Force running MockbaMod — a nodeServer plugin porting schwung-kit-builder's kit-building engine, XPM export only.",
+  "license": "MIT",
+  "scripts": {
+    "test": "node tests/run.js"
+  }
+}

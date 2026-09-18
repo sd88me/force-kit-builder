@@ -1,0 +1,72 @@
+<div id="kb-app">
+    <div id="kb-toolbar">
+        <input id="kb-kitname" type="text" placeholder="Untitled Kit" />
+        <button id="kb-new" title="Blank kit (unlocked pads only)">New</button>
+        <button id="kb-assign" title="Randomly fill every unlocked pad">Assign</button>
+        <button id="kb-clear" title="Clear every unlocked pad">Clear</button>
+        <button id="kb-unlock" title="Remove every lock">Unlock All</button>
+        <button id="kb-match" title="Attenuate loud pads toward the quietest">Match Levels</button>
+        <label class="kb-inline"><input id="kb-dupes" type="checkbox" checked /> avoid duplicates</label>
+        <button id="kb-save" title="Save this kit">Save</button>
+        <div class="kb-spacer"></div>
+        <span id="kb-status" class="kb-status"></span>
+    </div>
+
+    <div id="kb-main">
+        <div id="kb-grid"></div>
+
+        <div id="kb-side">
+            <section id="kb-pad-detail">
+                <h3>Pad</h3>
+                <div id="kb-pad-detail-body">
+                    <p class="kb-muted">Select a pad to see its details.</p>
+                </div>
+            </section>
+
+            <section id="kb-source">
+                <h3>Sample Sources</h3>
+                <ul id="kb-roots"></ul>
+                <button id="kb-add-root">+ Add folder…</button>
+                <div class="kb-scanfilters">
+                    <label class="kb-inline"><input id="kb-skiploops" type="checkbox" checked /> skip loops</label>
+                    <label class="kb-inline">max size
+                        <select id="kb-maxsize">
+                            <option value="">Off</option>
+                            <option value="1mb">1M</option>
+                            <option value="2mb">2M</option>
+                            <option value="5mb">5M</option>
+                            <option value="10mb">10M</option>
+                        </select>
+                    </label>
+                </div>
+                <button id="kb-rescan">Rescan</button>
+                <div id="kb-index-summary" class="kb-muted"></div>
+            </section>
+
+            <section id="kb-export">
+                <h3>Export (MPC .xpm)</h3>
+                <div id="kb-destdir" class="kb-path">No destination folder selected</div>
+                <button id="kb-choose-dest">Choose destination…</button>
+                <button id="kb-export-btn">Export</button>
+                <div id="kb-export-result" class="kb-muted"></div>
+            </section>
+        </div>
+    </div>
+</div>
+
+<div id="kb-browser-modal" class="kb-modal kb-hidden">
+    <div class="kb-modal-box">
+        <div class="kb-modal-header">
+            <span id="kb-browser-title">Choose a folder</span>
+            <button id="kb-browser-close">×</button>
+        </div>
+        <div id="kb-browser-path" class="kb-path"></div>
+        <ul id="kb-browser-list" class="kb-browser-list"></ul>
+        <div class="kb-modal-footer">
+            <button id="kb-browser-up">Up</button>
+            <button id="kb-browser-select">Select this folder</button>
+        </div>
+    </div>
+</div>
+
+<audio id="kb-audio" preload="none"></audio>
