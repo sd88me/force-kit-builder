@@ -114,7 +114,7 @@ async function withBody(handler) {
 /* ---- page shell ---------------------------------------------------------- */
 
 function LIST() {
-    RES.writeHead(200, { 'Content-Type': 'text/html' });
+    RES.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     const css = ['/kit-builder/style.css'];
     const js = ['/kit-builder/client.js|defer'];
     static.HEAD(RES, 'Force Kit Builder', css, js);
@@ -133,7 +133,7 @@ function ASSET(name, contentType) {
     const p = path.join(__dirname, name);
     fs.readFile(p, (err, data) => {
         if (err) { RES.writeHead(404, { 'Content-Type': 'text/plain' }); RES.end('not found'); return; }
-        RES.writeHead(200, { 'Content-Type': contentType });
+        RES.writeHead(200, { 'Content-Type': contentType + '; charset=utf-8' });
         RES.end(data);
     });
 }

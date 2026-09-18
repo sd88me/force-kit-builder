@@ -62,6 +62,9 @@
 
 .kb-pad {
     position: relative;
+    min-width: 0; /* grid items default to min-width:auto, which lets a long
+                     nowrap .kb-pad-sample filename force this track wider
+                     than its 1fr share and blow out #kb-grid's fixed width */
     aspect-ratio: 1 / 1;
     border-radius: 10px;
     background: #333;
