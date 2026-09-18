@@ -4,14 +4,10 @@ A web-based 16-pad drum-kit builder for the Akai Force running MockbaMod.
 Scans your sample library, auto-categorizes and randomly assigns samples
 onto a 16-pad grid, lets you lock/favourite/reject/reassign individual pads
 from a browser, and exports straight to an Akai MPC `.xpm` drum program on
-the Force's own disk — no Ableton Move, no hardware buttons, no separate
-export/transfer step.
+the Force's own disk — no hardware buttons, no separate export/transfer step.
 
-It's a port of [schwung-kit-builder](../schwung-kit-builder) (the same
-kit-building engine originally built for Ableton Move's Schwung), with every
-Ableton/Move preset format dropped and the on-device hardware UI replaced
-entirely by a browser UI. See [DESIGN.md](./DESIGN.md) for the full
-rationale, data model, API reference, and what changed vs. the original.
+See [DESIGN.md](./DESIGN.md) for the full architecture, data model, and API
+reference.
 
 ## Features
 
@@ -113,3 +109,9 @@ npm test          # node tests/run.js
 No build step for the web UI — `plugin/api/endpoints/kitbuilder/{client.js,
 style.css,template.html}` are served as-is by the endpoint, same as the rest
 of nodeServer's own tools.
+
+## Credits
+
+The kit-building engine — sample classification, random assignment, loudness
+matching, and the MPC `.xpm` export — originated in the `schwung` module
+ecosystem and was ported here to run as a standalone browser UI on the Force.
