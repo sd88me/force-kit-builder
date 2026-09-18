@@ -304,10 +304,11 @@ amount of DOM logic.
 
 - **Each pad tile**: sample name, a colour-coded category badge, a clickable
   pool-override `<select>` right on the tile, lock/favourite/reject icon
-  buttons, click-to-audition, and a border/background state that mirrors the
-  original hardware's LED priority (missing → locked → assigned → empty).
-- **Pad detail panel**: gain slider (dB readout), a waveform preview (see
-  below), reroll/clear buttons, library-wide fav/reject counts.
+  buttons, click-to-audition, a small waveform preview (see below), and a
+  border/background state that mirrors the original hardware's LED priority
+  (missing → locked → assigned → empty).
+- **Pad detail panel**: gain slider (dB readout), a larger waveform preview
+  (see below), reroll/clear buttons, library-wide fav/reject counts.
 - **Toolbar**: New, Assign, Clear, Unlock All, Match Levels, Save, Load XPM…,
   duplicate-avoidance toggle.
 - **Source panel**: selected root folders (add via the file-browser modal,
@@ -318,23 +319,36 @@ amount of DOM logic.
 
 ## Waveform preview
 
-Shown once, in the pad-detail side panel, for whichever pad is currently
-selected — not per-pad-tile. 16 simultaneous canvases decoding audio in
-~130px tiles was considered and rejected: cramped, and wasteful decoding for
-15 pads nobody's looking at. The side panel already exists for one pad's
-detail at a time, so that's where this lives.
+Shown in two places, sharing one implementation: a small canvas on every
+assigned pad tile (in the tile's flexible middle space, between the pool
+`<select>` and the filename), and a larger one in the pad-detail side panel
+for whichever pad is currently selected. Per-pad-only was the original v1
+scope; per-pad-tile was added on request once the side-panel version proved
+the approach — the earlier "16 canvases is wasteful" concern is addressed by
+caching (below), not by avoiding the per-pad case.
 
-Entirely client-side, no server changes: `client.js` fetches the pad's sample
-from the existing `/kit-builder/AUDIO/...` endpoint, decodes it with the
-Web Audio API (`decodeAudioData`), downsamples channel 0 into one
-{min,max} pair per canvas pixel column, and draws the envelope. Decoded
-peaks are cached by `filesystem_path` (`waveformCache`) so the re-render that
-follows every action (`refresh()` re-renders the whole pad detail panel) 
-doesn't redundantly re-fetch/re-decode the same audio — only a genuinely new
-pad selection triggers a fetch. A monotonically increasing token guards
-against the one real race: clicking a different pad while a previous pad's
-audio is still being fetched/decoded must not paint the stale result over the
-now-current pad's canvas.
+Entirely client-side, no server changes: `client.js` fetches a sample from
+the existing `/kit-builder/AUDIO/...` endpoint, decodes it with the Web Audio
+API (`decodeAudioData`), downsamples channel 0 into one {min,max} pair per
+canvas pixel column, and draws the envelope. Decoded peaks are cached by
+`filesystem_path` (`waveformCache`), shared across both the pad-tile and
+side-panel canvases, so a kit with the same sample assigned to two pads (or a
+re-render after an unrelated action rebuilding the whole grid) only decodes
+each unique sample once. One `AudioContext` is created lazily and reused for
+every decode (`getAudioCtx()`) rather than one per canvas — a full 16-pad
+grid can trigger up to 16 concurrent `decodeAudioData()` calls on first
+render, and creating 16 separate `AudioContext`s for that would be wasteful
+of real audio-hardware resources for a purely visual decode.
+
+Every canvas is a fresh DOM element created on each render (`renderGrid()`/
+`renderPadDetail()` rebuild their containers from scratch), so the one race
+worth guarding — a slow decode finishing after a newer render already
+replaced that pad's tile — is handled with a plain `canvas.isConnected`
+check before painting, rather than a shared monotonic token: painting into a
+detached canvas would be invisible anyway, and a per-canvas check is correct
+regardless of how many canvases are in flight at once (a shared token would
+incorrectly invalidate other pads' in-flight decodes the moment any one pad
+re-rendered).
 
 ## Explicitly out of scope for this version
 

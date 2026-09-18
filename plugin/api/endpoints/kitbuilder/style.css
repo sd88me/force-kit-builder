@@ -119,6 +119,19 @@
     padding: 2px;
 }
 
+.kb-pad-waveform {
+    flex: 1;             /* fills whatever's left between the pool select and
+                             the filename — .kb-pad is a column flexbox with
+                             justify-content:space-between, so this just needs
+                             to claim the middle instead of leaving it blank */
+    width: 100%;
+    min-height: 20px;
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 3px;
+    margin: 2px 0;
+    display: block;
+}
+
 .kb-pad-sample {
     font-size: 0.72rem;
     line-height: 1.15;

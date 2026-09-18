@@ -20,8 +20,8 @@
     let destDir = null;
     let browserTarget = null;     // 'root' | 'dest' | 'xpm-file' — what the open modal is choosing for
     let browserPath = '/media';
-    let waveformToken = 0;        // bumped on every pad selection to discard stale async draws
     const waveformCache = new Map();   // filesystem_path -> Float32Array-ish peak buckets
+    let sharedAudioCtx = null;    // one AudioContext reused for every decode (pad tiles + side panel)
 
     // Confirmed live on real hardware 2026-09-18 (see DESIGN.md): factory
     // expansion kits live flat here, .xpm beside .wav, no manifest needed.
@@ -150,6 +150,14 @@
 
             el.appendChild(top);
             el.appendChild(poolSelect);
+            if (pad.sample) {
+                const wf = document.createElement('canvas');
+                wf.className = 'kb-pad-waveform';
+                wf.width = 110;    // internal pixel buffer — small on purpose, CSS
+                wf.height = 32;    // stretches it to fill the tile's flexible middle
+                el.appendChild(wf);
+                drawWaveform(wf, pad.sample.filesystem_path);
+            }
             el.appendChild(sample);
             el.addEventListener('click', () => {
                 selectedPad = i;
@@ -276,11 +284,25 @@
         audio.play().catch(() => { /* autoplay/format issues are non-fatal */ });
     }
 
-    /* ---- waveform (side-panel only — see DESIGN.md for why not per-pad) --- */
+    /* ---- waveform (small per-pad preview + a larger one in the side panel) -
+     *
+     * Both surfaces share one decode cache (keyed by filesystem_path) and one
+     * lazily-created AudioContext — a full 16-pad grid can trigger up to 16
+     * concurrent decodeAudioData() calls on first render, so reusing a single
+     * context (rather than `new AudioContext()` per canvas) avoids piling up
+     * real audio-hardware resources for what's a purely visual decode. */
+
+    function getAudioCtx() {
+        if (!sharedAudioCtx) {
+            const AC = window.AudioContext || window.webkitAudioContext;
+            sharedAudioCtx = new AC();
+        }
+        return sharedAudioCtx;
+    }
 
     /* Downsample channel-0 PCM into `buckets` {min,max} pairs, one per pixel
      * column, computed once and cached by path so repeated re-renders (every
-     * action calls refresh(), which calls renderPadDetail() again) don't
+     * action calls refresh(), which rebuilds the whole grid) don't
      * re-fetch/re-decode the same audio. */
     function computePeaks(audioBuffer, buckets) {
         const data = audioBuffer.getChannelData(0);
@@ -320,7 +342,6 @@
     }
 
     async function drawWaveform(canvas, filesystemPath) {
-        const myToken = ++waveformToken;
         const cached = waveformCache.get(filesystemPath);
         if (cached) { paintWaveform(canvas, cached); return; }
 
@@ -328,11 +349,14 @@
         try {
             const res = await fetch('/kit-builder/AUDIO/' + encodeURIComponent(filesystemPath));
             const buf = await res.arrayBuffer();
-            if (myToken !== waveformToken) return;   // a different pad was selected meanwhile
-            const AC = window.AudioContext || window.webkitAudioContext;
-            const ctx = new AC();
-            const audioBuffer = await ctx.decodeAudioData(buf);
-            if (myToken !== waveformToken) return;
+            // Every pad tile gets its own freshly-created <canvas> on each
+            // render (renderGrid()/renderPadDetail() rebuild from scratch), so
+            // a canvas that's no longer attached by the time decode finishes
+            // means a newer render already replaced it — painting into it
+            // would be invisible anyway, just skip the wasted work.
+            if (!canvas.isConnected) return;
+            const audioBuffer = await getAudioCtx().decodeAudioData(buf);
+            if (!canvas.isConnected) return;
             const peaks = computePeaks(audioBuffer, canvas.width);
             waveformCache.set(filesystemPath, peaks);
             paintWaveform(canvas, peaks);
