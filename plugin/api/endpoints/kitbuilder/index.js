@@ -325,6 +325,64 @@ async function MATCH_LEVELS() {
     endJSON({ ok: true, kit: state.kit, gains });
 }
 
+/* ---- load an existing .xpm --------------------------------------------------
+ *
+ * See exporters/mpc_xpm.mjs's parseXpm() doc for the v1 "Instrument N = pad N"
+ * limitation. Samples are resolved case-insensitively next to the .xpm (the
+ * MPC's own convention — SampleName has no extension, so every supported
+ * extension is tried); anything not found is reported as a warning rather
+ * than failing the whole import. Replaces the whole working kit, same as
+ * NEW_KIT — this is a "start editing this kit" action, not a merge.
+ */
+async function IMPORT_XPM() {
+    const c = await ensureCore();
+    await withBody(async (body) => {
+        const xpmPath = body.path;
+        if (typeof xpmPath !== 'string' || !xpmPath) return errorJSON('path required');
+
+        let text;
+        try { text = fs.readFileSync(xpmPath, 'utf8'); } catch (e) { return errorJSON('could not read file: ' + (e.message || e)); }
+
+        const parsed = c.mpcXpm.parseXpm(text);
+        const dir = path.dirname(xpmPath);
+        let entries = [];
+        try { entries = fs.readdirSync(dir); } catch (e) { /* directory listing best-effort */ }
+        const byLower = new Map();
+        for (const f of entries) byLower.set(f.toLowerCase(), f);
+
+        const cfg = c.sampleIndex.loadConfig();
+        const aliasIndex = c.sampleClassifier.buildAliasIndex(cfg.role_rules);
+        const kit = c.kitModel.createKit(cfg);
+        kit.name = parsed.name || path.basename(xpmPath).replace(/\.xpm$/i, '');
+
+        const warnings = [];
+        const exts = ['.wav', '.WAV', '.aif', '.AIF', '.aiff', '.AIFF'];
+        let imported = 0;
+        for (let i = 0; i < 16; i++) {
+            const p = parsed.pads[i];
+            if (!p || !p.sampleName) continue;
+            let foundFile = null;
+            for (const ext of exts) {
+                const cand = byLower.get((p.sampleName + ext).toLowerCase());
+                if (cand) { foundFile = cand; break; }
+            }
+            if (!foundFile) { warnings.push(`pad ${i + 1}: sample "${p.sampleName}" not found next to the .xpm`); continue; }
+            const fullPath = path.join(dir, foundFile);
+            kit.pads[i].sample = {
+                filesystem_path: fullPath,
+                source: dir,
+                filename: foundFile,
+                category: c.sampleClassifier.classifyFilename(foundFile, aliasIndex)
+            };
+            imported++;
+        }
+
+        state.kit = kit;
+        persist(c);
+        endJSON({ ok: true, kit: state.kit, imported, warnings });
+    });
+}
+
 /* ---- save / export --------------------------------------------------------- */
 
 async function SAVE() {
@@ -401,6 +459,7 @@ function INIT($req, $res) {
         case 'CLEAR_ALL': CLEAR_ALL().catch(fail); break;
         case 'UNLOCK_ALL': UNLOCK_ALL().catch(fail); break;
         case 'NEW_KIT': NEW_KIT().catch(fail); break;
+        case 'IMPORT_XPM': IMPORT_XPM().catch(fail); break;
         case 'FAVREJECT': FAVREJECT().catch(fail); break;
         case 'MATCH_LEVELS': MATCH_LEVELS().catch(fail); break;
         case 'SAVE': SAVE().catch(fail); break;

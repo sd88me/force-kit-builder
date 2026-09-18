@@ -77,7 +77,8 @@ export const DEFAULT_CONFIG = {
         crash:      { folder_aliases: ['crash', 'crashes'] },
         ride:       { folder_aliases: ['ride', 'rides'] },
         cymbal:     { folder_aliases: ['cymbal', 'cymbals', 'cym'] },
-        fx:         { folder_aliases: ['fx', 'sfx', 'effect', 'effects', 'sound fx', 'sound effects', 'noise', 'noises', 'glitch', 'glitches', 'foley', 'impact', 'impacts', 'hit', 'hits', 'riser', 'risers', 'sweep', 'sweeps', 'transition', 'transitions'] },
+        fx:         { folder_aliases: ['fx', 'sfx', 'effect', 'effects', 'sound fx', 'sound effects', 'noise', 'noises', 'foley', 'impact', 'impacts', 'hit', 'hits', 'riser', 'risers', 'sweep', 'sweeps', 'transition', 'transitions'] },
+        glitch:     { folder_aliases: ['glitch', 'glitches', 'glitchy', 'grain', 'grains', 'granular'] },
         vox:        { folder_aliases: ['vox', 'vocal', 'vocals', 'voice', 'voices', 'chant', 'chants', 'choir'] },
         bass:       { folder_aliases: ['bass', 'basses', 'sub', 'subs'] },
         synth:      { folder_aliases: ['synth', 'synths', 'synthesizer', 'analog'] },
@@ -95,7 +96,7 @@ export const DEFAULT_CONFIG = {
 /* Every classification category, in a stable order (drives emptyCounts). */
 export const ROLE_ORDER = [
     'kick', 'snare', 'rim', 'clap', 'hat', 'closed_hat', 'open_hat',
-    'tom', 'conga', 'percussion', 'crash', 'ride', 'cymbal', 'fx',
+    'tom', 'conga', 'percussion', 'crash', 'ride', 'cymbal', 'fx', 'glitch',
     'vox', 'bass', 'synth', 'stab', 'chord', 'lead', 'pad', 'other'
 ];
 

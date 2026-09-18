@@ -61,6 +61,18 @@ export const tests = [
         eq(role(['Tambourine']), 'percussion');
         eq(role(['Cowbells']), 'percussion');
         eq(role(['Hits']), 'fx');
+        eq(role(['Riser']), 'fx');
+    }},
+
+    { name: 'glitch category: its own folder alias, filename fallback, and fx unaffected by the split', fn() {
+        eq(role(['Glitch']), 'glitch');
+        eq(role(['Granular']), 'glitch');
+        eq(fname('Granular_Texture_03.wav'), 'glitch');
+        eq(fname('glitchy_stutter.wav'), 'glitch');
+        eq(fname('grain_cloud_01.wav'), 'glitch');
+        // fx keeps its remaining aliases after 'glitch'/'glitches' moved off it
+        eq(role(['FX']), 'fx');
+        eq(fname('riser_up.wav'), 'fx');
     }},
 
     { name: 'generic hat vs closed/open, plurals', fn() {

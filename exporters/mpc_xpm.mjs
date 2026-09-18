@@ -67,6 +67,56 @@ function xmlEscape(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+function xmlUnescape(s) {
+    return String(s).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+
+/*
+ * parseXpm(text) -> { name, pads: [{ padNum, sampleName } | null] }  (pads.length === 16)
+ *
+ * Reads an existing .xpm back out, for the web UI's "Load XPM" feature.
+ * Extracts <ProgramName> and, for Instrument numbers 1..16 only, Layer 1's
+ * <SampleName> (empty string => that pad has no sample; the array slot stays
+ * null only when the Instrument itself is entirely absent from the file).
+ *
+ * v1 LIMITATION (deliberate, document loudly): this assumes Instrument N in
+ * the XML *is* physical pad N — true for every .xpm this project's own
+ * exporter produces (see buildXpm() above) and for every real factory/
+ * AutoMpcKitter-style file inspected during this project (Instruments always
+ * emitted in ascending order starting at 1). A real MPC program COULD in
+ * principle remap pads to arbitrary Instrument numbers via <PadNoteMap>; this
+ * importer does not follow that indirection. Good enough for "load a kit this
+ * tool (or a typical factory pack) made, keep editing it" — not a general MPC
+ * program reader.
+ *
+ * Stops scanning once Instrument 16 has been seen (real files emit ascending
+ * order, and a full drum program is ~1MB/128 instruments — no reason to keep
+ * regex-scanning the other 112 we'll never use).
+ *
+ * Pure function — no fs access. Never throws: malformed/truncated input just
+ * yields whatever could be found (a completely unparseable string yields
+ * `{ name: null, pads: 16×null }`).
+ */
+export function parseXpm(text) {
+    const s = String(text == null ? '' : text);
+    const nameMatch = /<ProgramName>([\s\S]*?)<\/ProgramName>/.exec(s);
+    const name = nameMatch ? xmlUnescape(nameMatch[1]) : null;
+
+    const pads = new Array(KIT_PADS).fill(null);
+    const instrRe = /<Instrument number="(\d+)">([\s\S]*?)<\/Instrument>/g;
+    let m;
+    while ((m = instrRe.exec(s))) {
+        const n = parseInt(m[1], 10);
+        if (n > KIT_PADS) break;          // ascending order in every real file — done
+        if (n < 1) continue;
+        const layerMatch = /<Layer number="1">([\s\S]*?)<\/Layer>/.exec(m[2]);
+        const sampleMatch = layerMatch ? /<SampleName>([^<]*)<\/SampleName>/.exec(layerMatch[1]) : null;
+        pads[n - 1] = { padNum: n, sampleName: sampleMatch ? xmlUnescape(sampleMatch[1]) : '' };
+        if (n === KIT_PADS) break;
+    }
+    return { name, pads };
+}
+
 /* MPC sample name = the source file's own basename, extension dropped,
  * filesystem/XML-safe (spaces kept), capped at NAME_MAX. The MPC loads
  * "<SampleName>.wav" from the .xpm's folder, so the gathered copy is named to

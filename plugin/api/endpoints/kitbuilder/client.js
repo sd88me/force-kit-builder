@@ -18,8 +18,10 @@
     let STATE = null;
     let selectedPad = null;
     let destDir = null;
-    let browserTarget = null;     // 'root' | 'dest' — what the open modal is choosing for
+    let browserTarget = null;     // 'root' | 'dest' | 'xpm-file' — what the open modal is choosing for
     let browserPath = '/media';
+    let waveformToken = 0;        // bumped on every pad selection to discard stale async draws
+    const waveformCache = new Map();   // filesystem_path -> Float32Array-ish peak buckets
 
     // Confirmed live on real hardware 2026-09-18 (see DESIGN.md): factory
     // expansion kits live flat here, .xpm beside .wav, no manifest needed.
@@ -202,6 +204,15 @@
         body.appendChild(gainSlider);
 
         if (pad.sample) {
+            const canvas = document.createElement('canvas');
+            canvas.id = 'kb-waveform';
+            canvas.width = 260;
+            canvas.height = 60;
+            body.appendChild(canvas);
+            drawWaveform(canvas, pad.sample.filesystem_path);
+        }
+
+        if (pad.sample) {
             const favCount = favs.length, rejCount = rejects.length;
             const counts = document.createElement('div');
             counts.className = 'kb-muted';
@@ -265,12 +276,80 @@
         audio.play().catch(() => { /* autoplay/format issues are non-fatal */ });
     }
 
+    /* ---- waveform (side-panel only — see DESIGN.md for why not per-pad) --- */
+
+    /* Downsample channel-0 PCM into `buckets` {min,max} pairs, one per pixel
+     * column, computed once and cached by path so repeated re-renders (every
+     * action calls refresh(), which calls renderPadDetail() again) don't
+     * re-fetch/re-decode the same audio. */
+    function computePeaks(audioBuffer, buckets) {
+        const data = audioBuffer.getChannelData(0);
+        const per = Math.max(1, Math.floor(data.length / buckets));
+        const peaks = new Array(buckets);
+        for (let i = 0; i < buckets; i++) {
+            const start = i * per;
+            const end = i === buckets - 1 ? data.length : Math.min(data.length, start + per);
+            let min = 0, max = 0;
+            for (let j = start; j < end; j++) {
+                const v = data[j];
+                if (v < min) min = v;
+                if (v > max) max = v;
+            }
+            peaks[i] = { min, max };
+        }
+        return peaks;
+    }
+
+    function paintWaveform(canvas, peaks) {
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width, h = canvas.height, mid = h / 2;
+        ctx.clearRect(0, 0, w, h);
+        ctx.strokeStyle = '#444';
+        ctx.beginPath();
+        ctx.moveTo(0, mid);
+        ctx.lineTo(w, mid);
+        ctx.stroke();
+        if (!peaks || !peaks.length) return;
+        ctx.fillStyle = '#9c9';
+        for (let x = 0; x < peaks.length && x < w; x++) {
+            const p = peaks[x];
+            const y1 = mid - p.max * mid;
+            const y2 = mid - p.min * mid;
+            ctx.fillRect(x, y1, 1, Math.max(1, y2 - y1));
+        }
+    }
+
+    async function drawWaveform(canvas, filesystemPath) {
+        const myToken = ++waveformToken;
+        const cached = waveformCache.get(filesystemPath);
+        if (cached) { paintWaveform(canvas, cached); return; }
+
+        paintWaveform(canvas, null);   // clear to the center-line placeholder while loading
+        try {
+            const res = await fetch('/kit-builder/AUDIO/' + encodeURIComponent(filesystemPath));
+            const buf = await res.arrayBuffer();
+            if (myToken !== waveformToken) return;   // a different pad was selected meanwhile
+            const AC = window.AudioContext || window.webkitAudioContext;
+            const ctx = new AC();
+            const audioBuffer = await ctx.decodeAudioData(buf);
+            if (myToken !== waveformToken) return;
+            const peaks = computePeaks(audioBuffer, canvas.width);
+            waveformCache.set(filesystemPath, peaks);
+            paintWaveform(canvas, peaks);
+        } catch (e) {
+            /* decode failure (unsupported format, truncated file) — leave the
+             * center-line placeholder rather than surfacing an error, this is
+             * a non-essential visualisation. */
+        }
+    }
+
     /* ---- folder-picker modal (reuses nodeServer's /file-browser/LIST) --- */
 
     function openBrowser(title, target, startPath) {
         browserTarget = target;
         browserPath = startPath || '/media';
         document.getElementById('kb-browser-title').textContent = title;
+        document.getElementById('kb-browser-select').classList.toggle('kb-hidden', target === 'xpm-file');
         document.getElementById('kb-browser-modal').classList.remove('kb-hidden');
         loadBrowserPath(browserPath);
     }
@@ -286,7 +365,7 @@
         const ul = document.getElementById('kb-browser-list');
         ul.innerHTML = '';
         const folders = listing.FOLDERS || [];
-        if (!folders.length) {
+        if (!folders.length && browserTarget !== 'xpm-file') {
             const li = document.createElement('li');
             li.textContent = '(no subfolders)';
             li.style.cursor = 'default';
@@ -298,6 +377,35 @@
             li.addEventListener('click', () => loadBrowserPath(f.path));
             ul.appendChild(li);
         });
+
+        if (browserTarget === 'xpm-file') {
+            const files = (listing.FILES || []).filter((f) => /\.xpm$/i.test(f.name || ''));
+            files.forEach((f) => {
+                const li = document.createElement('li');
+                li.textContent = '🥁 ' + f.name;
+                li.addEventListener('click', () => importXpmFile(f.path));
+                ul.appendChild(li);
+            });
+            if (!folders.length && !files.length) {
+                const li = document.createElement('li');
+                li.textContent = '(no .xpm files here)';
+                li.style.cursor = 'default';
+                ul.appendChild(li);
+            }
+        }
+    }
+
+    async function importXpmFile(xpmPath) {
+        closeBrowser();
+        try {
+            const r = await api('IMPORT_XPM', { path: xpmPath });
+            selectedPad = null;
+            await refresh();
+            const msg = 'Loaded ' + r.imported + ' pad(s)' + (r.warnings.length ? ' (' + r.warnings.length + ' warning(s))' : '');
+            setStatus(msg, false);
+        } catch (e) {
+            setStatus(String(e.message || e), true);
+        }
     }
 
     function browserUp() {
@@ -334,6 +442,7 @@
         document.getElementById('kb-save').addEventListener('click', () => run(() =>
             api('SAVE', { name: document.getElementById('kb-kitname').value, overwriteName: STATE.kit.name }), 'Saved'));
 
+        document.getElementById('kb-load-xpm').addEventListener('click', () => openBrowser('Load an XPM kit', 'xpm-file', SUGGESTED_EXPORT_DIR));
         document.getElementById('kb-add-root').addEventListener('click', () => openBrowser('Add a sample folder', 'root'));
         document.getElementById('kb-choose-dest').addEventListener('click', () => openBrowser('Choose export destination', 'dest', SUGGESTED_EXPORT_DIR));
         document.getElementById('kb-browser-close').addEventListener('click', closeBrowser);

@@ -159,6 +159,7 @@
     color: #aaa;
 }
 
+#kb-waveform { background: #1a1a1a; border-radius: 4px; display: block; margin-top: 6px; width: 100%; height: 60px; }
 #kb-pad-detail-body label { display: block; font-size: 0.8rem; margin-top: 6px; }
 #kb-pad-detail-body input[type=range] { width: 100%; }
 #kb-pad-detail-body .kb-row { display: flex; gap: 6px; margin-top: 6px; }

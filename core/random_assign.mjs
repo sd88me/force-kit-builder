@@ -48,7 +48,7 @@ export function bucketByRole(index, source) {
  * categories; the sentinel `["other"]` expands to every category that has no
  * dedicated pad slot, plus `fx` (fx sits on pad 12 AND in the catch-all pads).
  * Falls back to the built-in layout / list if the config is incomplete. */
-const OTHER_FALLBACK = ['vox', 'bass', 'synth', 'stab', 'chord', 'lead', 'pad', 'other', 'fx'];
+const OTHER_FALLBACK = ['vox', 'bass', 'synth', 'stab', 'chord', 'lead', 'pad', 'other', 'fx', 'glitch'];
 
 export function otherPoolCats(config, padLayout) {
     const all = Object.keys((config && config.role_rules) || {});

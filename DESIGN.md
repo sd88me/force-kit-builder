@@ -125,8 +125,19 @@ Each pad:
 
 ## Category/pool system
 
-22 flat categories (`kick snare rim clap hat closed_hat open_hat tom conga
-percussion crash ride cymbal fx vox bass synth stab chord lead pad other`),
+23 flat categories (`kick snare rim clap hat closed_hat open_hat tom conga
+percussion crash ride cymbal fx glitch vox bass synth stab chord lead pad
+other`) — `glitch` (aliases: `glitch`, `glitches`, `glitchy`, `grain`,
+`grains`, `granular`) was split off `fx` (which used to also claim
+`glitch`/`glitches` before `buildAliasIndex()`'s first-writer-wins rule made
+that ambiguous) as its own category, added after this project's initial
+build. It has no dedicated pad slot, so — like every other unslotted category
+— it falls into pads 13-16's catch-all pool automatically via
+`random_assign.mjs`'s `otherPoolCats()`, and into the SYSTEM status panel's
+"Other" line automatically via `sample_index.mjs`'s `summarize()` (neither
+needed a code change beyond adding the category itself; that's the payoff of
+those two functions computing "everything not explicitly slotted" instead of
+a fixed list).
 classified by folder path (deepest match wins) with a filename-token fallback
 when the folder yields nothing. Each of the 16 pads draws from a **union** of
 one or more categories (`pad_layout`); pad 12 is always `fx`, pads 13–16 are
@@ -237,7 +248,50 @@ is a `POST` with a JSON body, replying `{ ok: true, ... }` or
 | `MATCH_LEVELS` | — | Measure each assigned pad's RMS and attenuate to match. |
 | `SAVE` | `{ name, overwriteName? }` | Write the working `.kitbuilder.json`. |
 | `EXPORT` | `{ name, destDir }` | Write the MPC `.xpm` + samples + MANIFEST to `destDir`. |
+| `IMPORT_XPM` | `{ path }` | Load an existing `.xpm` (picked via the same file-browser modal, in file-picking mode) and replace the whole working kit with it — see "Loading an existing .xpm" below for the v1 limitation. |
 | `AUDIO/<encodeURIComponent(path)>` (GET) | — | Streams one sample for audition — **only** a path already known to the current kit or the loaded index; never an arbitrary query path (see the handler's own doc for the reasoning). |
+
+## Loading an existing .xpm
+
+`exporters/mpc_xpm.mjs`'s `parseXpm(text)` is the read side of the same
+template-based approach `buildXpm()` uses to write — a couple of regexes
+pulling `<ProgramName>` and, for Instrument numbers 1-16, Layer 1's
+`<SampleName>`, rather than a real XML parser (consistent with the rest of
+this exporter's "keep it a template, not a schema" philosophy).
+
+**v1 limitation, load-bearing, worth restating outside the code comment too**:
+this assumes Instrument N in the XML *is* physical pad N. That's true for
+every `.xpm` this project's own exporter produces, and — confirmed live
+against a real factory file, `Expansions/Kits & Patterns/Mainroom-Kit-Ultra.xpm`
+(1MB, pulled and parsed directly, all 16 pads resolved correctly with zero
+warnings) — true for standard factory/AutoMpcKitter-style content too, since
+Instruments are always emitted in ascending order starting at 1. A real MPC
+program *could* in principle remap pads to arbitrary Instrument numbers via
+`<PadNoteMap>`; this importer doesn't follow that indirection. Good enough for
+"load a kit this tool (or a typical factory pack) made, keep editing it" — not
+a general-purpose MPC program reader.
+
+The `IMPORT_XPM` action (`plugin/api/endpoints/kitbuilder/index.js`) resolves
+each pad's `SampleName` (which never carries an extension — an MPC convention,
+not something this tool invented) against the files actually sitting next to
+the `.xpm`, case-insensitively, trying `.wav`/`.WAV`/`.aif`/`.AIF`/`.aiff`/
+`.AIFF` in turn; anything not found is a warning, not a failed import.
+Category is guessed from the resolved filename alone via the same
+`classifyFilename()` fallback the scanner uses (there's no folder-hierarchy
+context in a flat Expansions-style folder to do better than that). Per-pad
+gain/volume from the source file is **not** preserved — MPC's own `<Volume>`
+field uses an undocumented, likely non-linear curve, and guessing at a
+conversion felt worse than just defaulting every imported pad to 1.0 (0 dB)
+and being explicit about it here. This action replaces the whole working kit,
+the same as `NEW_KIT` — it's a "start editing this kit" action, not a merge
+into whatever was already open.
+
+Client-side, "Load XPM…" reuses the existing folder-browser modal in a new
+mode (`browserTarget: 'xpm-file'`): it lists `.xpm` entries from
+`/file-browser/LIST`'s `FILES` array (confirmed live: `{path, name, type,
+size, mtime, ...}`, `type` an uppercase extension with no dot) alongside the
+usual folders, and clicking one calls `IMPORT_XPM` immediately rather than
+"select and close" like the folder pickers do.
 
 ## Web UI
 
@@ -252,15 +306,35 @@ amount of DOM logic.
   pool-override `<select>` right on the tile, lock/favourite/reject icon
   buttons, click-to-audition, and a border/background state that mirrors the
   original hardware's LED priority (missing → locked → assigned → empty).
-- **Pad detail panel**: gain slider (dB readout), reroll/clear buttons,
-  library-wide fav/reject counts.
-- **Toolbar**: New, Assign, Clear, Unlock All, Match Levels, Save,
+- **Pad detail panel**: gain slider (dB readout), a waveform preview (see
+  below), reroll/clear buttons, library-wide fav/reject counts.
+- **Toolbar**: New, Assign, Clear, Unlock All, Match Levels, Save, Load XPM…,
   duplicate-avoidance toggle.
 - **Source panel**: selected root folders (add via the file-browser modal,
   which calls nodeServer's own `/file-browser/LIST`), scan filters
   (skip-loops, max-size), Rescan, live index summary.
 - **Export panel**: kit name, destination folder (same file-browser modal),
   Export button, warnings/manifest summary.
+
+## Waveform preview
+
+Shown once, in the pad-detail side panel, for whichever pad is currently
+selected — not per-pad-tile. 16 simultaneous canvases decoding audio in
+~130px tiles was considered and rejected: cramped, and wasteful decoding for
+15 pads nobody's looking at. The side panel already exists for one pad's
+detail at a time, so that's where this lives.
+
+Entirely client-side, no server changes: `client.js` fetches the pad's sample
+from the existing `/kit-builder/AUDIO/...` endpoint, decodes it with the
+Web Audio API (`decodeAudioData`), downsamples channel 0 into one
+{min,max} pair per canvas pixel column, and draws the envelope. Decoded
+peaks are cached by `filesystem_path` (`waveformCache`) so the re-render that
+follows every action (`refresh()` re-renders the whole pad detail panel) 
+doesn't redundantly re-fetch/re-decode the same audio — only a genuinely new
+pad selection triggers a fetch. A monotonically increasing token guards
+against the one real race: clicking a different pad while a previous pad's
+audio is still being fetched/decoded must not paint the stale result over the
+now-current pad's canvas.
 
 ## Explicitly out of scope for this version
 
@@ -340,6 +414,28 @@ text; all 90 unit tests still pass unchanged. Worth a quick byte-level scan
 generated by a similar pipeline, since this one hid well enough that normal
 review wouldn't catch it by reading the rendered text.
 
+### Glitch category + XPM import + waveform pass
+
+Added the `glitch` category, `IMPORT_XPM`, and the side-panel waveform in one
+pass; 95/95 unit tests pass (90 prior + 1 new classifier case + 4 new
+`parseXpm` cases in `tests/test_xpm_import.js`). `parseXpm()` was verified
+against real content before being wired into the server at all: pulled
+`Expansions/Kits & Patterns/Mainroom-Kit-Ultra.xpm` (1,032,268 bytes) directly
+off the live device and ran it through the parser standalone first — all 16
+pads resolved to plausible sample names — then round-tripped this exporter's
+own `buildXpm()` output back through `parseXpm()` as a second sanity check,
+before wiring `IMPORT_XPM` into `index.js` at all. Redeployed the same
+push-files-then-`app/restart` process as the initial install; this time
+`restart` returned cleanly instead of appearing to hang (both are normal —
+whether the backgrounded node process holds the SSH pty open seems to depend
+on timing, not a real failure signal either way). Live-exercised `IMPORT_XPM`
+against that same real factory file over `curl`: `imported: 16, warnings: []`,
+every pad correctly resolved and classified (e.g. `Mainroom-FX-MR FX 10.WAV`
+→ `fx`, `Mainroom-Vocal-MR Vox 19.WAV` → `vox`) — concrete confirmation the
+v1 "Instrument N = pad N" assumption holds for real factory content, not just
+this project's own output. Reset the live working kit back to blank
+afterward via `NEW_KIT` so the device wasn't left mid-test.
+
 ## Judgment calls worth knowing about
 
 - **Test-harness circular import bug, fixed upstream of Move too**:
@@ -364,3 +460,11 @@ review wouldn't catch it by reading the rendered text.
   original's `pad_layout`, not stored on the kit document itself. If a
   future version wants "this kit's pad 6 is always crash, but other kits
   aren't," that's a data-model change, not a bug fix.
+- **Imported pads always get gain 1.0** — see "Loading an existing .xpm"
+  above; MPC's own per-pad `<Volume>` curve is undocumented, so this
+  deliberately doesn't guess a conversion rather than silently mis-translate
+  loudness on import.
+- **`IMPORT_XPM` replaces the whole working kit**, same as `NEW_KIT` — there's
+  no "merge this xpm's pads into my current kit" mode. Revisit if that turns
+  out to be a real workflow people want (e.g. importing just a few pads from
+  a factory kit into a kit already in progress).
