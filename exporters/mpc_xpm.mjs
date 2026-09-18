@@ -6,11 +6,14 @@
  * write/mkdir/copy/frameCount) so the export logic itself is unchanged. The
  * one real change: the Move original defaulted `opts.dir` to a hardcoded
  * `MPC_EXPORT_ROOT` Move path when the caller omitted it. That constant is
- * gone — `opts.dir` is now REQUIRED. See DESIGN.md's open item: exactly
- * where the Force's own Program browser expects to find user XPM kits is
- * NOT YET CONFIRMED on real hardware, so this deliberately has no built-in
- * "correct" destination to fall back on — the web UI's destination-folder
- * picker always supplies one explicitly.
+ * gone — `opts.dir` is still REQUIRED here, never defaulted inside this
+ * module. Confirmed live over SSH on 2026-09-18 (see DESIGN.md): the Force's
+ * own factory expansion kits live flat under
+ * `/media/az01-internal-sd/Expansions/Kits & Patterns/`, `.xpm` sitting
+ * directly beside its `.wav` samples, no manifest/registration needed — so
+ * that path is the right *suggested* default for a destination-folder
+ * picker to pre-fill, but it's the caller's job to supply it (as the web
+ * UI's picker now does); this module still refuses to guess.
  *
  * The MPC program format is not documented; per github.com/psrpinto/roger the
  * safe approach is to take a real exported .xpm as a template and change only

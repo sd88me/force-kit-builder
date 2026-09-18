@@ -182,22 +182,36 @@ No sample-rate/bit-depth/mono-stereo normalization happens anywhere in this
 pipeline — files pass through as exact byte copies (`fs.copyFileSync`); only
 the WAV header is read, to measure frame count and (for Match Levels) RMS.
 
-### ⚠️ Open item — export destination is NOT a settled default
+### Export destination — confirmed on real hardware 2026-09-18
 
-**Where the Force's own Program browser actually expects to find a
-user-added `.xpm` kit on disk has not been confirmed on real hardware.**
-`exportMpcXpm(kit, name, destDir)` therefore takes `destDir` as a **required**
-argument — there is deliberately no hardcoded "correct" Force path baked in
-anywhere in this repo. The web UI always makes you pick a destination folder
-via the file-browser widget before Export is enabled.
+Checked live over SSH (192.168.1.44, same discipline `force-acid`'s and
+`force-shadow`'s own DESIGN.md files use for load-bearing hardware facts —
+don't guess these, verify them): `/media/az01-internal-sd/projects/*_
+[ProjectData]/` (a Force project's own sample folder) contains **no** `.xpm`
+files at all — a Project's own Programs aren't stored as loose `.xpm` files,
+so that's not the right place. The Force's actual factory content lives at
+`/media/az01-internal-sd/Expansions/Kits & Patterns/` — inspected directly
+(e.g. the "Mainroom" pack): every `.xpm` sits **flat, directly beside its
+own `.wav` samples**, mixed in with every other pack's files in the same
+folder, no per-pack subfolder, no manifest or registration file of any kind.
+This confirms the exporter's own long-standing "self-contained folder,
+`<SampleName>.wav` beside the `.xpm`" convention is exactly right, and that
+nothing beyond plain files needs to exist for the Force to browse to and
+load a kit from a folder.
 
-Before treating any particular Force path as "the" right default, verify it
-live over SSH the same way `force-acid`'s and `force-shadow`'s own DESIGN.md
-files document doing for their own load-bearing hardware facts — don't guess
-this one. Candidates worth checking first: wherever `nodeServer`'s own
-`config.json` already points its `PROJECTS_DIR`/expansion-folder settings,
-and how the Force's Program browser actually resolves a "Drum" program's
-sample search path relative to the current Project.
+`exportMpcXpm(kit, name, destDir)` still takes `destDir` as a **required**
+argument — this repo still refuses to hardcode a destination inside the
+exporter itself. What changed: the web UI's destination-folder picker now
+*opens to* `/media/az01-internal-sd/Expansions/Kits & Patterns` by default
+(see `SUGGESTED_EXPORT_DIR` in `plugin/api/endpoints/kitbuilder/client.js`)
+as a confirmed-sane starting point, not an auto-selected value — you still
+have to browse in and hit Select. A live install of this plugin also wrote
+a real generated smoke-test kit to a `ForceKitBuilder-SmokeTest` subfolder
+there to confirm the file layout lands correctly (see the Testing section);
+whether the Force's own Program browser actually *loads and plays* it still
+needs eyes on the physical touchscreen, which this session couldn't do
+remotely — that's the one piece still worth a manual check next time you're
+at the device.
 
 ## API (served by `plugin/api/endpoints/kitbuilder/index.js`)
 
@@ -279,6 +293,52 @@ own `file-browser` `READ`/`DOWNLOAD` convention. That integration harness
 wasn't kept in the repo (it lived in a scratch directory) — if this project
 grows, promoting some version of it into `tests/` would be worth doing
 before it's forgotten.
+
+### Live install pass (2026-09-18)
+
+Installed for real onto the live device (192.168.1.44) via `install.sh
+/media/662522/AddOns/nodeServer/app`, backing up the live `ENDPOINTS.js`
+first (`ENDPOINTS.js.bak-20260918`, alongside it). Every assumption in this
+doc's "Architecture" section checked out against the real nodeServer
+code with zero surprises: `INIT(req, res, NS)`'s 3-arg signature, the
+`URL[2]` switch-based router (nodeServer's own `app-template/index.js` has
+a cosmetic no-op `.replace('/^\//', '')` bug — passes a literal string, not
+a regex, so it never strips the leading slash — this plugin's `INIT()`
+deliberately mirrors that exact line for consistency, since it doesn't
+change the routing outcome either way), `static.HEAD/MENU/INCLUDE/CLOSE`,
+the `|defer` suffix convention in `jsTag()`, and `/file-browser/LIST`'s
+`{PATH} → {FOLDERS: [{name, path}, ...]}` shape — all confirmed byte-for-byte
+via direct SSH inspection before relying on them. `node -e
+"require('.../ENDPOINTS.js')"` confirmed the patched file parses cleanly;
+`nodeServer/app/restart` (the same script its own watchdog calls) brought it
+back up on ports 8080/443 both times this was restarted; `curl` against
+`/kit-builder`, `/kit-builder/client.js`, and `POST /kit-builder/STATE` all
+returned real, correctly-shaped responses (a genuine 16-pad kit, not a
+mock). A real kit was also generated with the actual `exportMpcXpm()` (three
+tiny synthesized WAVs, via the `node:20-slim` Docker approach above) and
+copied onto the device as `Expansions/Kits & Patterns/
+ForceKitBuilder-SmokeTest/` — files landed with correct structure and
+non-zero sizes. What this *doesn't* confirm: whether the Force's own Program
+browser actually loads and plays that kit — nobody was at the physical
+touchscreen to check, so that's still the one open item, not the export
+path itself (which is now confirmed, see above).
+
+While tracing the `EXPORT` call path during this pass, `core/storage.mjs`
+turned out to have a real latent bug from porting, unrelated to the
+nodeServer integration: `sanitizeFilename()`'s control-character regex,
+meant to read `/[\x00-\x1f\x7f]/g` as literal escape-sequence *text*, had
+somehow been written with three actual raw control bytes (0x00, 0x1F, 0x7F)
+substituted directly into the file instead. This didn't break anything at
+runtime — V8 parses raw control bytes inside a regex character class just
+fine, and the live `/kit-builder/STATE` call above proves the file loaded
+and ran correctly even before the fix — but it made the file register as
+binary ("data") to `file`, `grep`, and likely `git diff`, which is a real
+maintainability trap for a file nobody would think to `xxd` first. Fixed by
+replacing the three raw bytes with their proper 12-character escape-sequence
+text; all 90 unit tests still pass unchanged. Worth a quick byte-level scan
+(`grep -c` a raw NUL, or open in a hex-aware tool) on any future files
+generated by a similar pipeline, since this one hid well enough that normal
+review wouldn't catch it by reading the rendered text.
 
 ## Judgment calls worth knowing about
 

@@ -21,6 +21,12 @@
     let browserTarget = null;     // 'root' | 'dest' — what the open modal is choosing for
     let browserPath = '/media';
 
+    // Confirmed live on real hardware 2026-09-18 (see DESIGN.md): factory
+    // expansion kits live flat here, .xpm beside .wav, no manifest needed.
+    // This only seeds where the destination browser opens to — it is never
+    // auto-selected, the user still has to browse in and hit Select.
+    const SUGGESTED_EXPORT_DIR = '/media/az01-internal-sd/Expansions/Kits & Patterns';
+
     /* ---- API helpers ------------------------------------------------- */
 
     async function api(action, body) {
@@ -329,7 +335,7 @@
             api('SAVE', { name: document.getElementById('kb-kitname').value, overwriteName: STATE.kit.name }), 'Saved'));
 
         document.getElementById('kb-add-root').addEventListener('click', () => openBrowser('Add a sample folder', 'root'));
-        document.getElementById('kb-choose-dest').addEventListener('click', () => openBrowser('Choose export destination', 'dest'));
+        document.getElementById('kb-choose-dest').addEventListener('click', () => openBrowser('Choose export destination', 'dest', SUGGESTED_EXPORT_DIR));
         document.getElementById('kb-browser-close').addEventListener('click', closeBrowser);
         document.getElementById('kb-browser-up').addEventListener('click', browserUp);
         document.getElementById('kb-browser-select').addEventListener('click', browserSelect);
