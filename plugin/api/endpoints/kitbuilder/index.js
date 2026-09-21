@@ -63,6 +63,7 @@ function ensureCore() {
         const prefs = storage.loadPrefs();
         state.rejects = prefs.rejects;
         state.favourites = prefs.favourites;
+        state.lastExportDir = prefs.lastExportDir;
         return core;
     })();
     return coreLoading;
@@ -199,6 +200,13 @@ async function RESCAN() {
 
 function persist(c) { c.storage.saveCurrentKit(state.kit); }
 
+/* Always carries state.lastExportDir through - savePrefs() replaces the
+ * whole preferences.json each call, so any call site that skipped this
+ * would silently erase it (see core/storage.mjs's savePrefs doc). */
+function persistPrefs(c) {
+    c.storage.savePrefs(state.rejects, state.favourites, { last_export_dir: state.lastExportDir || '' });
+}
+
 async function ASSIGN() {
     const c = await ensureCore();
     await withBody(async (body) => {
@@ -302,7 +310,7 @@ async function FAVREJECT() {
         else if (body.action === 'clear_all_favourites') state.favourites.clear();
         else if (body.action === 'clear_all_rejects') state.rejects.clear();
         else return errorJSON('unknown action: ' + body.action);
-        c.storage.savePrefs(state.rejects, state.favourites);
+        persistPrefs(c);
         endJSON({ ok: true, rejects: Array.from(state.rejects), favourites: Array.from(state.favourites) });
     });
 }
@@ -398,6 +406,7 @@ async function EXPORT() {
     await withBody(async (body) => {
         if (!body.destDir) return errorJSON('destDir required — pick a destination folder first');
         const r = c.storage.exportMpcXpm(state.kit, body.name, body.destDir);
+        if (r.ok) { state.lastExportDir = body.destDir; persistPrefs(c); }
         endJSON({ ok: r.ok, path: r.path, dir: r.dir, warnings: r.warnings, errors: r.errors, padCount: r.padCount, gathered: r.gathered });
     });
 }

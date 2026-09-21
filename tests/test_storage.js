@@ -100,6 +100,22 @@ export const tests = [
             const loaded = loadPrefs();
             eq(Array.from(loaded.rejects).sort(), ['/a.wav', '/b.wav']);
             eq(Array.from(loaded.favourites).sort(), ['/c.wav']);
+            eq(loaded.lastExportDir, '');
+        });
+    }},
+
+    { name: 'savePrefs persists last_export_dir, omitting extra leaves it unset', fn() {
+        withScratchDir(() => {
+            savePrefs(new Set(), new Set(), { last_export_dir: '/media/662522/Expansions' });
+            eq(loadPrefs().lastExportDir, '/media/662522/Expansions');
+
+            /* A call site that forgets to pass `extra` (or a caller not
+             * threading it through) replaces the whole file and drops it -
+             * this is the exact hazard persistPrefs() in the nodeServer
+             * endpoint exists to avoid; documented here as the behaviour
+             * to guard against, not a desired outcome. */
+            savePrefs(new Set(), new Set());
+            eq(loadPrefs().lastExportDir, '');
         });
     }}
 ];

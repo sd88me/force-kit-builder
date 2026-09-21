@@ -612,26 +612,100 @@ with `force-shadow`'s offline PPM/PNG harness (`force-device-workflow`
 skill) before touching the device, same as every other page in this
 family.
 
-### Open items before implementation
+### Open items — resolved, v1 implemented (2026-09-21)
 
-- [ ] Confirm exact `KB_DIR` path resolution works identically from the new
-      daemon's install location as it does from inside nodeServer's process
-      (should — `sample_index.mjs`'s `KB_DIR` doesn't appear to depend on
-      `__dirname`, but verify, not assume).
-- [ ] Decide how `core/`/`exporters/` physically get onto the device for
-      the addon to `import` — a copy step in `install.sh`/the addon's own
-      install, or restructuring this repo so both the nodeServer plugin
-      and the new addon reference one on-disk copy. Either is fine
-      functionally; pick whichever keeps a version-skew mistake (addon and
-      plugin importing different copies of `storage.mjs` after only one
-      gets redeployed) hardest to make by accident.
-- [ ] `reassign_pad` on a locked pad: silently no-op, or `ERR` so the
-      shadow-GUI renderer can flash/reject the tap? Check how other addons'
-      control sockets signal "rejected, but not a real error."
-- [ ] Render and eyeball-check the layout above with the offline PPM
-      harness before any live-device test.
-- [ ] Decide the addon's boot-loop entry shape for a process with no
-      continuous audio/MIDI responsibility — closest precedent needed
-      (probably still just a plain background process + `run_*.sh`, per
-      `references/architecture.md`, but confirm rather than assume it needs
-      nothing special just because it's "only" a control-socket listener).
+- [x] **`KB_DIR` resolution**: confirmed by reading `sample_index.mjs` —
+      `KB_DIR` has no `__dirname` dependency, it's whatever
+      `configureDataDir()` was last called with. The daemon calls it with
+      the exact same path nodeServer's plugin does
+      (`<mmPath>/AddOns/nodeServer/app/kitbuilder-core/data`), so both
+      processes share one data directory automatically.
+- [x] **How `core`/`exporters` get onto the device**: resolved by *not*
+      copying them at all — the daemon imports directly from nodeServer's
+      already-installed `kitbuilder-core/`
+      (`addon/host/daemon.mjs`'s `resolveNodeServerAppDir()`). One copy on
+      disk, imported by two processes; the version-skew risk the open item
+      worried about doesn't exist because there's nothing to skew. Real
+      cost: Kit Builder's shadow GUI now hard-depends on the FORCE-APPS-
+      SERVER-MOCKBA fork's Kit Builder being installed first, on top of
+      the nodeServer dependency the "Architecture" section above already
+      accepted.
+- [x] **Locked-pad `reassign_pad`**: `core/random_assign.mjs`'s
+      `rerollPad()` already returns `{changed:false, warning:'pad is
+      locked'}` rather than throwing — the daemon replies `OK <warning
+      text>`, not `ERR`, and surfaces it via the `status` readout. Verified
+      in the offline socket test below.
+- [x] **Boot-loop entry shape**: plain background process, standard
+      `manage.sh`/`run_forcekitbuilder.sh` contract per
+      `references/architecture.md` — no LD_PRELOAD, no `acvs` restart, no
+      `NSMODULE.json`/Modules Manager entry (there's no on/off engine
+      state to manage). `run_forcekitbuilder.sh`'s `kill` handler greps the
+      process list for `daemon.mjs` specifically rather than `killall
+      node`, which would also take down nodeServer itself.
+- [ ] **Offline visual render before ever touching the device**: turned
+      out to be a false assumption in the original scoping —
+      `force-shadow/tools/render_preview.c` is hardcoded to Maze Voice's
+      own page, not a generic `.conf` renderer, so there is currently no
+      way to actually see this layout rendered without either extending
+      that tool or looking at the real device. The coordinates below are
+      hand-checked against the real 1280x800 landscape canvas
+      (`LAND_W`/`LAND_H` in that file) so nothing overflows the bounds,
+      but exact spacing/overlap is unverified until a real look — first
+      `SHIFT+SCENE-1` on the device should be treated as the actual layout
+      review, not a formality.
+
+### v1 implementation notes
+
+- `addon/host/daemon.mjs` re-reads `current-kit.json` from disk on every
+  request (`syncKit()`), not just at startup — the web plugin and this
+  daemon each hold their own in-memory copy, so without this the shadow
+  page could show a stale kit after the web UI generates/edits one.
+  `index`/prefs are *not* re-synced per-request (only via `RESCAN`/export
+  from the web UI, infrequent enough that startup-load is an acceptable v1
+  limitation — revisit if that assumption turns out wrong in practice).
+- **No persisted export destination existed before this** — the web UI's
+  `EXPORT` action took `destDir` fresh on every call, nothing saved to
+  `preferences.json`. Added `last_export_dir` to `loadPrefs()`/
+  `savePrefs()` (`core/storage.mjs`) plus a `persistPrefs()` helper in the
+  nodeServer endpoint that always threads it through — `savePrefs()`
+  replaces the whole file each call, so any call site that forgot to pass
+  it would have silently erased a previously-saved value; there's now
+  exactly one call site to get that right instead of several. The daemon
+  reads this value but never writes it — no folder picker on a
+  touchscreen, so "export once from the web UI to set the destination,
+  then the shadow page can re-export there" is the intended flow.
+- Verified offline end-to-end in Docker (`node:20-slim`, no device
+  needed) before writing a line of `shadow_page.conf`: a fake `mmPath`
+  tree with synthetic WAV fixtures and a hand-built sample index, the
+  daemon started for real, a raw socket client scripted through
+  `GET pads` → `SET generate` (hit the real "duplicates allowed" warning
+  path) → lock → `SET reassign_pad` on both a locked and unlocked pad →
+  `SET export` (both the "no dir configured" `ERR` path and, with
+  `preferences.json` seeded, a real `.xpm` + `MANIFEST.txt` + gathered
+  WAVs written to disk and confirmed present). This is what caught the
+  `h=900` frame overflowing the 800px canvas height in the first
+  `shadow_page.conf` draft, and confirmed the locked-pad path replies
+  `OK`, not `ERR`, as designed.
+- Full `tests/run.js` suite (104 cases after adding `last_export_dir`
+  coverage) still passes — `docker run --rm -v $(pwd):/app -w /app
+  node:20-slim node tests/run.js`.
+
+### Still not done
+
+- Not yet deployed to or tested on the real device — SSH access to a
+  MockbaMod Force wasn't available in the environment this was built in.
+  Deploy via the usual staged-copy pattern
+  (`force-device-workflow` skill), enable via `manage.sh ENABLE`, then
+  work through the verification checklist in
+  `mockbamod-module-creator`'s `references/architecture.md` (process
+  runs, survives a real reboot, etc.) before trusting it live.
+- No favourite/reject controls on the shadow page (v1 is intentionally
+  core-loop-only, per the original scoping decision) — `core/storage.mjs`'s
+  `last_export_dir` plumbing was written generically enough that adding
+  more prefs fields later doesn't need another `persistPrefs()`-style
+  refactor.
+- `render_preview.c` only covers Maze Voice — extending it to take an
+  arbitrary `shadow_page.conf` (or writing a parallel generic tool) would
+  benefit every future addon in this family, not just this one; flagging
+  it here since this project is what surfaced the gap, but it's arguably
+  a `force-shadow` repo issue, not a `force-kit-builder` one.

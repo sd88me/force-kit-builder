@@ -230,23 +230,36 @@ export function loadPrefs() {
             const p = JSON.parse(raw);
             return {
                 rejects: new Set(Array.isArray(p.rejects) ? p.rejects : []),
-                favourites: new Set(Array.isArray(p.favourites) ? p.favourites : [])
+                favourites: new Set(Array.isArray(p.favourites) ? p.favourites : []),
+                lastExportDir: typeof p.last_export_dir === 'string' ? p.last_export_dir : ''
             };
         }
     } catch (e) {
         console.log('force-kit-builder: preferences.json unreadable, starting empty (' + e + ')');
     }
-    return { rejects: new Set(), favourites: new Set() };
+    return { rejects: new Set(), favourites: new Set(), lastExportDir: '' };
 }
 
-export function savePrefs(rejects, favourites) {
+/*
+ * `extra` merges additional top-level fields into preferences.json (right
+ * now just `last_export_dir` — the shadow-GUI daemon has no folder picker
+ * of its own, so it exports to whatever directory the web UI's picker was
+ * last pointed at; see DESIGN.md's v2 scoping section). Existing callers
+ * that only pass (rejects, favourites) are unaffected - extra defaults to
+ * {} and any field not present here is simply omitted from the write.
+ */
+export function savePrefs(rejects, favourites, extra) {
     try {
         hMkdir(KB_DIR);
-        return writeJsonAtomic(prefsPath(), {
+        const out = {
             schema_version: 1,
             rejects: Array.from(rejects || []),
             favourites: Array.from(favourites || [])
-        });
+        };
+        if (extra && typeof extra.last_export_dir === 'string') {
+            out.last_export_dir = extra.last_export_dir;
+        }
+        return writeJsonAtomic(prefsPath(), out);
     } catch (e) { return false; }
 }
 
