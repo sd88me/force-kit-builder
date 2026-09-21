@@ -495,3 +495,143 @@ afterward via `NEW_KIT` so the device wasn't left mid-test.
   no "merge this xpm's pads into my current kit" mode. Revisit if that turns
   out to be a real workflow people want (e.g. importing just a few pads from
   a factory kit into a kit already in progress).
+
+## v2 scoping: standalone on-device addon with a shadow GUI (not yet built)
+
+"Any hardware-button/on-device-GUI control path at all" was explicitly out
+of scope for the version above. This section scopes reversing that — a real
+MockbaMod addon (`ForceKitBuilder`) that renders a touchscreen page via
+`force-shadow`, **alongside** the existing nodeServer web plugin, not
+replacing it. Decided 2026-09-21, not yet implemented — this is the plan to
+pick up when building it, same role as force-shadow's own old "RESUME HERE"
+section played before that project shipped.
+
+### Why alongside, not instead
+
+The web plugin stays the full-detail surface: source-folder/export-folder
+pickers (via nodeServer's `/file-browser/LIST`), per-pad pool
+reassignment, category tuning, waveform preview, XPM import. A touchscreen
+page has nowhere to put a file-path text field or a fine-grained pool
+editor with any real usability — trying to cram that in would make the
+shadow page worse at its job (fast, physical, no-laptop-needed kit
+iteration) without actually replacing the web UI's, so both stay.
+
+### Key finding: they already share state for free
+
+`core/storage.mjs` is the **only** thing that reads/writes
+`current-kit.json` and `preferences.json` under `KB_DIR`. The nodeServer
+plugin doesn't own that state — it just calls into `storage.mjs` like any
+other caller. That means a new on-device daemon that also imports
+`core/storage.mjs` (and `kit_model.mjs`, `random_assign.mjs`,
+`sample_classifier.mjs`, `exporters/mpc_xpm.mjs` — the same modules the
+plugin already uses, unmodified, straight from this repo) is *automatically*
+looking at the same working kit and the same source/export-folder prefs the
+web UI set — no new sync mechanism to design or maintain. Generate a kit on
+the touchscreen, open the web UI, see the same kit; either surface's
+`EXPORT` writes the same `current-kit.json` the other would read next.
+
+This is also the direct answer to "can they both share the same core code
+so I don't have to maintain both": yes, literally the same `core/` and
+`exporters/` directories, imported by two different front ends. Nothing
+about the core layer is nodeServer-specific already (see the "Architecture"
+section above — it's plain ES modules with no browser/HTTP assumptions
+baked in), which is exactly what makes this cheap.
+
+### Architecture
+
+New addon folder, `AddOns/ForceKitBuilder/`, alongside this repo's existing
+`core/`/`exporters/` (deployed either as a git submodule-style copy at
+install time, or a relative import if colocated — decide at build time, not
+a design blocker):
+
+- `manage.sh`, `run_forcekitbuilder.sh` — standard MockbaMod addon
+  contract (`references/architecture.md` in the `mockbamod-module-creator`
+  skill has the exact shape).
+- `host/daemon.mjs` — a small Node process (Node's already on-device via
+  the nodeServer AddOn) that:
+  - Listens on a Unix control socket at `/tmp/kitbuilder_ctrl.sock`
+    (matches the `/tmp/<addon>_ctrl.sock` convention `force-dx7`/
+    `force-maze` already use), speaking the plain
+    `SET <key> <value>\n -> OK\n|ERR\n` / `GET <key>\n -> <value>\n`
+    protocol every other shadow-GUI-backed addon uses (confirmed identical
+    across addons per `force-shadow/docs/adding-a-page.md`).
+  - Imports `core/storage.mjs`, `core/kit_model.mjs`,
+    `core/random_assign.mjs`, `core/sample_classifier.mjs`,
+    `exporters/mpc_xpm.mjs` directly — the daemon is a thin protocol
+    adapter, not a reimplementation. Same division of labour as
+    `plugin/api/endpoints/kitbuilder/index.js`, just a Unix-socket
+    frontend instead of an HTTP one.
+  - **No `engine_process_name` block in `shadow_page.conf`** — Kit Builder
+    isn't a continuous DSP engine with an audio on/off state, so there's no
+    on/off button to draw. The daemon can just run at boot like any other
+    lightweight background addon (idle until a `SET`/`GET` arrives, no
+    meaningful resource cost).
+  - Source/export folders: **read-only from the daemon's side** — it reads
+    whatever `preferences.json` already holds (set via the web UI's
+    pickers), not its own copy. If nothing's configured yet,
+    `GET status` should say so plainly rather than silently no-op, so the
+    touchscreen page can show a "set source/export folders in the web UI
+    first" message instead of a confusing empty grid.
+
+### Control protocol (v1 — core loop only)
+
+| key | direction | meaning |
+|---|---|---|
+| `pads` | GET | JSON array of 16 `{label, name}` — `label` = sample filename (or "empty"), `name` = category, for the pad-grid `list` widget |
+| `pad_sel` | GET/SET | currently selected pad index (0-15); `SET` both selects *and* is what the `list` widget's tap sends |
+| `pad_info` | GET | one-line text for the selected pad (full sample name + category + source pool) — feeds a `readout` |
+| `pad_lock` | GET/SET | lock state (0/1) of the selected pad — `bits`/`toggle` widget |
+| `generate` | SET | regenerate all unlocked pads (calls `random_assign`'s existing logic, same as the web UI's `ASSIGN` action) |
+| `reassign_pad` | SET | reassign just the selected pad, respecting its lock state (should be a no-op / `ERR` if locked) |
+| `export` | SET | write the current kit to the configured export folder (same `exportMpcXpm()` call the web `EXPORT` action makes) |
+| `status` | GET | last operation's result message, or a "not configured yet" notice — feeds a `readout` |
+
+### Shadow page layout (single tab, v1)
+
+The `list` widget's `cols=`/`rows=` grid is a direct fit for the 16-pad
+layout — no need for 16 separate widgets. Modeled on `force-dx7`'s
+existing two-`list` page (`force-dx7/addon/shadow_page.conf:238-240`) as
+the closest real precedent for "tappable grid + detail readout":
+
+```
+[tab Kit]
+frame   x=36 y=36 w=724 h=900 title="PADS"
+list    x=52 y=88 w=692 h=848 key=pad_sel items=pads sel=pad_sel \
+        cols=4 rows=4 th=150 gap=12 jump=0 colmajor=0 numbered=1 scale=2
+frame   x=776 y=36 w=468 h=900 title="SELECTED PAD"
+readout x=792 y=88 w=436 h=120 label="" get=pad_info
+toggle  cx=850 cy=260 label="Lock" key=pad_lock
+button  cx=850 cy=340 label="Reassign" key=reassign_pad
+button  cx=850 cy=460 label="Generate All" key=generate
+button  cx=850 cy=580 label="Export Kit" key=export
+readout x=792 y=680 w=436 h=180 label="" get=status
+```
+
+Coordinates are a first pass, not measured against a real render — verify
+with `force-shadow`'s offline PPM/PNG harness (`force-device-workflow`
+skill) before touching the device, same as every other page in this
+family.
+
+### Open items before implementation
+
+- [ ] Confirm exact `KB_DIR` path resolution works identically from the new
+      daemon's install location as it does from inside nodeServer's process
+      (should — `sample_index.mjs`'s `KB_DIR` doesn't appear to depend on
+      `__dirname`, but verify, not assume).
+- [ ] Decide how `core/`/`exporters/` physically get onto the device for
+      the addon to `import` — a copy step in `install.sh`/the addon's own
+      install, or restructuring this repo so both the nodeServer plugin
+      and the new addon reference one on-disk copy. Either is fine
+      functionally; pick whichever keeps a version-skew mistake (addon and
+      plugin importing different copies of `storage.mjs` after only one
+      gets redeployed) hardest to make by accident.
+- [ ] `reassign_pad` on a locked pad: silently no-op, or `ERR` so the
+      shadow-GUI renderer can flash/reject the tap? Check how other addons'
+      control sockets signal "rejected, but not a real error."
+- [ ] Render and eyeball-check the layout above with the offline PPM
+      harness before any live-device test.
+- [ ] Decide the addon's boot-loop entry shape for a process with no
+      continuous audio/MIDI responsibility — closest precedent needed
+      (probably still just a plain background process + `run_*.sh`, per
+      `references/architecture.md`, but confirm rather than assume it needs
+      nothing special just because it's "only" a control-socket listener).
