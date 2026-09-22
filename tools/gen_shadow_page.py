@@ -28,15 +28,18 @@ HEADER = '''# ForceKitBuilder — shadow-GUI page (v1: core loop only — genera
 # Keeps style=td3's proven widget shapes (rounded frames, pill buttons)
 # and only overrides the theme_* colour values.
 #
-# Layout: three tabs instead of one - PADS 1-8, PADS 9-16, GLOBAL. Each
-# of the 16 pads now carries its own LOCK/REROLL/CLEAR controls directly
+# Layout: four tabs - PADS 1-8, PADS 9-16, GLOBAL, POOL ASSIGN. Each of
+# the 16 pads carries its own LOCK/REROLL/CLEAR/PLAY controls directly
 # (no more shared "selected pad" side panel + a 4x4 tap-to-select grid) -
 # see DESIGN.md for why this needed splitting across two pad tabs: 16
-# pads x (frame + readout + toggle + 2 buttons) = 80 widgets, over the
-# format's 64-widgets-per-tab cap; 8 pads/tab x 5 widgets = 40, well
+# pads x (frame + readout + toggle + 3 buttons) = 96 widgets, over the
+# format's 64-widgets-per-tab cap; 8 pads/tab x 6 widgets = 48, well
 # under it, and leaves room to grow. This also delivers "bigger pads" -
 # each pad now gets a full ~610x150 cell instead of a ~140px grid tile,
-# room for the complete sample name instead of a truncated one.
+# room for the complete sample name instead of a truncated one. POOL
+# ASSIGN is its own tab since 16 pads x 23 categories of individual
+# toggles is nowhere near fitting alongside anything else - see
+# DESIGN.md's "Pool assignment page" section for the full design.
 #
 # IMPORTANT widget coordinate rule (confirmed against
 # force-shadow/src/force_shadow.c's real conf parser, not just the
@@ -83,6 +86,13 @@ theme_go_off=616161
 theme_tabs=1a1a1a
 '''
 
+# Same hex as theme_accent below - button `color=` overrides a single
+# button's background (confirmed supported by both the preview tool and
+# the real force_shadow.c parser, not just one of them), used here so
+# PLAY stands out from the grey REROLL/CLEAR buttons without a second
+# theme. See force-shadow/docs/adding-a-page.md's button syntax.
+ACCENT_HEX = 'ff8f00'
+
 CELL_W, CELL_H = 610, 150
 COL_X = [20, 650]
 ROW_Y = [82, 244, 406, 568]
@@ -115,7 +125,7 @@ def pad_cell(pad_num, pad_index, x, y):
         f'toggle  cx={lock_cx} cy={ctrl_cy} label="LOCK" key=pad_lock_{pad_index}',
         f'button  cx={reroll_cx} cy={ctrl_cy} label="REROLL" key=reroll_pad_{pad_index}',
         f'button  cx={clear_cx} cy={ctrl_cy} label="CLEAR" key=clear_pad_{pad_index}',
-        f'button  cx={play_cx} cy={ctrl_cy} label="PLAY" key=play_pad_{pad_index}',
+        f'button  cx={play_cx} cy={ctrl_cy} label="PLAY" key=play_pad_{pad_index} color={ACCENT_HEX}',
     ]
     return '\n'.join(lines)
 
@@ -199,6 +209,66 @@ def global_tab():
     return '\n'.join(lines) + '\n'
 
 
+# ---- POOL ASSIGN tab: which categories each pad draws from ---------------
+# core/sample_index.mjs's ROLE_ORDER, hardcoded here rather than read live -
+# this script has no Node runtime to import it with. Keep in sync by hand;
+# a mismatch wouldn't error, it would just make one category untoggleable
+# from the shadow page (same class of silent-drift risk shadow-gui.md
+# warns about for engine/web/shadow param triples generally).
+CATEGORIES = [
+    ('kick', 'KICK'), ('snare', 'SNARE'), ('rim', 'RIM'), ('clap', 'CLAP'),
+    ('hat', 'HAT'), ('closed_hat', 'CLOSED HAT'), ('open_hat', 'OPEN HAT'),
+    ('tom', 'TOM'), ('conga', 'CONGA'), ('percussion', 'PERC'),
+    ('crash', 'CRASH'), ('ride', 'RIDE'), ('cymbal', 'CYMBAL'), ('fx', 'FX'),
+    ('glitch', 'GLITCH'), ('vox', 'VOX'), ('bass', 'BASS'), ('synth', 'SYNTH'),
+    ('stab', 'STAB'), ('chord', 'CHORD'), ('lead', 'LEAD'), ('pad', 'PAD'),
+    ('other', 'OTHER'),
+]
+
+POOL_FRAME1 = (20, 82, 1240, 260)     # SELECT PAD
+POOL_FRAME2 = (20, 360, 1240, 360)    # CATEGORIES
+POOL_CAT_COLS, POOL_CAT_ROWS = 6, 4
+
+
+def pool_tab():
+    f1x, f1y, f1w, f1h = POOL_FRAME1
+    f2x, f2y, f2w, f2h = POOL_FRAME2
+
+    # frame_box() (both the preview tool and the real force_shadow.c) draws
+    # the frame's own title at y+14 and a divider rule at y+38 - anything
+    # placed above that divider collides with the title text. First draft
+    # put the readout/RESET row at y+32, squarely on top of "SELECT PAD" -
+    # caught by rendering (a stray "S" was all that showed), not by the
+    # numbers. Everything else here starts below y+38.
+    row1_cy = f1y + 55
+    list_cx0, list_cy0 = f1x + 16, f1y + 90
+    list_w, list_h = f1w - 32, f1h - 106
+    list_th = (list_h - 10) // 2   # 2 rows, gap=10
+
+    lines = [
+        '[tab POOL ASSIGN]',
+        f'frame   x={f1x} y={f1y} w={f1w} h={f1h} title="SELECT PAD"',
+        f'readout cx={f1x + 220} cy={row1_cy} w=360 h=32 label="" get=pool_editing_label',
+        f'button  cx={f1x + f1w - 120} cy={row1_cy} label="RESET" key=pool_reset',
+        f'list    x={list_cx0} y={list_cy0} w={list_w} h={list_h} key=pool_pad_sel items=pool_pads sel=pool_pad_sel cols=8 rows=2 th={list_th} gap=10 jump=0 colmajor=0 numbered=1 scale=1.5',
+        f'frame   x={f2x} y={f2y} w={f2w} h={f2h} title="CATEGORIES - TAP TO TOGGLE"',
+    ]
+
+    interior_x0, interior_x1 = f2x + 16, f2x + f2w - 16
+    interior_y0, interior_y1 = f2y + 40, f2y + f2h - 16
+    col_step = (interior_x1 - interior_x0) / POOL_CAT_COLS
+    row_step = (interior_y1 - interior_y0) / POOL_CAT_ROWS
+
+    for i, (cat, label) in enumerate(CATEGORIES):
+        col = i % POOL_CAT_COLS
+        row = i // POOL_CAT_COLS
+        cx = int(interior_x0 + col_step * col + col_step / 2)
+        cy = int(interior_y0 + row_step * row + row_step / 2)
+        lines.append(f'toggle  cx={cx} cy={cy} label="{label}" key=pool_cat_{cat}')
+
+    return '\n'.join(lines) + '\n'
+
+
 if __name__ == '__main__':
     import sys
     args = sys.argv[1:]
@@ -208,9 +278,10 @@ if __name__ == '__main__':
         # Comparison layout - all 16 pads on one tab (no per-pad frame,
         # exactly 64 widgets), GLOBAL still separate. Not the committed
         # default; generate explicitly to compare against the 2-tab layout.
-        out = HEADER + '\n' + pads_tab_all16() + '\n' + global_tab()
+        out = HEADER + '\n' + pads_tab_all16() + '\n' + global_tab() + '\n' + pool_tab()
     else:
-        out = HEADER + '\n' + pads_tab('PADS 1-8', 1) + '\n' + pads_tab('PADS 9-16', 9) + '\n' + global_tab()
+        out = (HEADER + '\n' + pads_tab('PADS 1-8', 1) + '\n' + pads_tab('PADS 9-16', 9)
+               + '\n' + global_tab() + '\n' + pool_tab())
     dest = args[0] if args else '/dev/stdout'
     with open(dest, 'w') as f:
         f.write(out)

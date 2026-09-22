@@ -38,6 +38,15 @@
  * audio ring can't live in this always-on daemon). If preview_host isn't
  * running yet, this fails gracefully (ERR, not a crash) - it's an
  * optional companion process, not a hard dependency of the core daemon.
+ *
+ * pool_pad_sel/pool_pads/pool_editing_label/pool_cat_<category>/pool_reset
+ * back the POOL ASSIGN tab - the one place this daemon does track a
+ * "currently selected" pad (state.poolSel), since 23 categories x 16 pads
+ * of individual toggles isn't remotely near the widget budget, so the
+ * page picks one pad at a time via a list widget instead. Writes go
+ * straight through core/storage.mjs's existing savePadLayoutEntry() - the
+ * same function the web UI's SET_POOL action already uses, config-wide
+ * not per-kit (see that function's own doc comment).
  */
 
 import fs from 'node:fs';
@@ -80,7 +89,13 @@ const state = {
     rejects: new Set(),
     favourites: new Set(),
     lastExportDir: '',
-    status: 'Ready.'
+    status: 'Ready.',
+    /* Which pad the POOL ASSIGN tab is currently editing - the one place
+     * in this daemon that genuinely needs a "currently selected" concept
+     * (the per-pad PADS tabs deliberately don't, see the note above), since
+     * a `list` widget's own selection state lives on force-shadow's side,
+     * not here - this just tracks the same index. */
+    poolSel: 0
 };
 
 function reloadFromDisk() {
@@ -136,6 +151,32 @@ function padInfoText(i) {
     return shadowFontSafe(`${i + 1}: ${p.sample.filename} - ${p.sample.category}${lock}`);
 }
 
+/* ---- pool-assign helpers -------------------------------------------------
+ *
+ * Pool assignment (which categories a pad draws from) is config-wide, not
+ * per-kit - see core/storage.mjs's savePadLayoutEntry() doc. This tab edits
+ * it directly through that same function the web UI's SET_POOL action
+ * already uses; no new core logic, just a shadow-GUI front end for it. */
+
+function poolPadsJson() {
+    return JSON.stringify(Array.from({ length: 16 }, (_, i) => ({ label: String(i + 1), name: '' })));
+}
+
+function poolEditingLabel() {
+    return shadowFontSafe(`EDITING PAD ${state.poolSel + 1}`);
+}
+
+function currentPoolCategories() {
+    const cfg = sampleIndex.loadConfig();
+    return kitModel.padPool(state.poolSel + 1, cfg);   // padPool takes a 1-indexed pad number
+}
+
+function setPoolCategories(categories) {
+    storage.savePadLayoutEntry(state.poolSel, categories);
+}
+
+const CATEGORY_RE = /^pool_cat_(.+)$/;
+
 /* ---- SET/GET handlers ---------------------------------------------------
  *
  * v1's protocol had one shared pad_sel/pad_info/pad_lock triple driving a
@@ -160,6 +201,15 @@ function doGet(key) {
         return '';
     }
     if (key === 'status') return shadowFontSafe(state.status);
+
+    if (key === 'pool_pads') return poolPadsJson();
+    if (key === 'pool_pad_sel') return String(state.poolSel);
+    if (key === 'pool_editing_label') return poolEditingLabel();
+    const catMatch = key.match(CATEGORY_RE);
+    if (catMatch) {
+        return currentPoolCategories().includes(catMatch[1]) ? '1' : '0';
+    }
+
     return '';
 }
 
@@ -208,6 +258,27 @@ function doSet(key, value) {
             return { ok: true, msg: state.status };
         }
         return { ok: false, msg: 'read-only key: ' + key };
+    }
+
+    if (key === 'pool_pad_sel') {
+        const i = parseInt(value, 10);
+        if (!Number.isInteger(i) || i < 0 || i > 15) return { ok: false, msg: 'bad pad index' };
+        state.poolSel = i;
+        return { ok: true, msg: '' };
+    }
+    const catMatch = key.match(CATEGORY_RE);
+    if (catMatch) {
+        const cat = catMatch[1];
+        const current = currentPoolCategories();
+        const next = current.includes(cat) ? current.filter((c) => c !== cat) : current.concat([cat]);
+        setPoolCategories(next);
+        state.status = `Pad ${state.poolSel + 1} pool: ${next.join(', ') || 'other'}`;
+        return { ok: true, msg: state.status };
+    }
+    if (key === 'pool_reset') {
+        setPoolCategories(kitModel.DEFAULT_PAD_LAYOUT[state.poolSel]);
+        state.status = `Pad ${state.poolSel + 1} pool reset to default.`;
+        return { ok: true, msg: state.status };
     }
 
     syncKit();

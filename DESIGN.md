@@ -1160,3 +1160,83 @@ the daemon relay is verified, but a real touchscreen tap dispatching that
 `SET` is the one link this environment can't exercise. Ring slot 3 and
 Audio-In track routing remain the same open items as before this
 revision — unrelated to what changed here.
+
+## Pool assignment page (2026-09-22, same day)
+
+Picked up the "how would pool assignment even fit" question from the v2
+refinements section above — the constraint there (23 categories, no
+multi-select widget, `enum_h`/`enum_v` capped at 6 options) was correct,
+but incomplete: it didn't yet know about `toggle`'s live `GET`-backed
+state refresh, or that this family already has a working precedent for
+exactly this shape.
+
+**Precedent, not invented from scratch**: `EUCLIDIER-CONSOLE/addon/shadow_page.conf`
+has a real 4×2 grid of individual `toggle` widgets (`rand_l1..rand_l8`,
+its "which layers randomize" picker) — genuine multi-select, each toggle
+independently on/off, confirmed live-tested in that project already.
+That's the technique this page uses for categories: 23 individual
+`toggle` widgets, not one attempt to cram them into a single wrong-shaped
+widget. Confirmed `toggle` actually supports live state refresh (not just
+a static `on=` set once at page load) by reading `force_shadow.c`'s own
+poll loop — `W_TOGGLE`'s `GET <key>` result updates `w->state` every
+cycle, same `key=` serving both `SET` and the implicit `GET`.
+
+**Design**: new `POOL ASSIGN` tab (4th tab, `page` format allows up to
+8). Top frame ("SELECT PAD") holds an 8×2 `list` widget — one widget for
+all 16 pads, tap to select which pad's pool you're editing, plus a
+`pool_editing_label` readout and a `RESET` button (restores that pad's
+`DEFAULT_PAD_LAYOUT` entry). Bottom frame ("CATEGORIES") holds the 23
+category toggles in a 6×4 grid (one slot unused). Total: 1 list + 1
+readout + 1 button + 23 toggles + 2 frames ≈ 28 widgets, well under the
+64 cap — the "user might build a real page here" version of the earlier
+rough math, not just an estimate.
+
+**Two real bugs the render caught, not the numbers**:
+- First draft declared the `list` widget's box at `h=124` for a
+  `th=130 rows=2 gap=10` grid (needs 270px) — `render_conf_preview`
+  itself printed `WARNING: list grid_h=270 exceeds declared h=124`, not
+  a silent visual bug this time. Fixed by deriving `th` from the
+  available height instead of guessing a round number first.
+- The `pool_editing_label` readout and `RESET` button were first placed
+  at `y+32` inside the "SELECT PAD" frame — squarely on top of
+  `frame_box()`'s own title text (drawn at `y+14`) and divider rule
+  (`y+38`, confirmed by reading that function directly, both in the
+  preview tool and the real `force_shadow.c`). The render showed a
+  single stray "S" where "SELECT PAD" should have been. Fixed by moving
+  that row below the divider.
+
+**Backend** (`daemon.mjs`): `pool_pads`/`pool_pad_sel`/`pool_editing_label`
+(GET), `pool_pad_sel`/`pool_cat_<category>`/`pool_reset` (SET) — the one
+place this daemon tracks a "currently selected" index (`state.poolSel`),
+since 16×23 individual per-pad-per-category toggles is nowhere near the
+widget budget, so the page edits one pad's pool at a time. No new core
+logic: reads/writes go straight through `core/kit_model.mjs`'s existing
+`padPool()` and `core/storage.mjs`'s existing `savePadLayoutEntry()` —
+the same function the web UI's `SET_POOL` action already uses. Category
+list (`ROLE_ORDER`, 23 entries) is hardcoded into
+`tools/gen_shadow_page.py` rather than read live from
+`core/sample_index.mjs` (the generator script has no Node runtime to
+import it with) — flagged as a hand-sync risk, same class as the
+engine/web/shadow triple `shadow-gui.md` already warns about generally:
+a mismatch wouldn't error, it would just leave one category untoggleable.
+
+**Verified**: full protocol tested end-to-end against a real `daemon.mjs`
+(Docker fixture harness) — default pools match `DEFAULT_PAD_LAYOUT`
+exactly (pad 1 = kick only, pad 2 = rim+snare), adding/removing a
+category persists and reflects immediately on the next `GET`, switching
+`pool_pad_sel` correctly isolates state per pad (toggling pad 1's pool
+doesn't affect pad 2's), `RESET` restores the exact default, and edge
+cases (`pool_pad_sel 99`, a nonexistent category key) degrade gracefully
+rather than erroring. All four tabs rendered together with no warnings.
+Full `tests/run.js` suite (104 cases, unaffected) still passes.
+
+**PLAY button colour**: also asked to make `PLAY` stand out — `button`
+widgets support a per-button `color=` override (confirmed in both the
+preview tool and the real `force_shadow.c` parser), used here with the
+same hex as `theme_accent` so it's visually consistent with the rest of
+the orange accent, not a clashing third colour.
+
+**Not tested**: the same real-hardware gap as everything else in this
+file — a live touchscreen tap on `POOL ASSIGN`'s toggles, and whether
+the 8×2 pad-select list reads comfortably at native resolution with 16
+real (not fixture) items.
