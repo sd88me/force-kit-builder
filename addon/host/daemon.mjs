@@ -92,24 +92,37 @@ function syncKit() {
 
 /* ---- pad helpers -------------------------------------------------------- */
 
+/* force-shadow's baked font (src/font8x8.h) only has glyphs for space,
+ * A-Z (uppercase only), 0-9, and ". - / > % + :" - anything else silently
+ * renders as a blank gap, not an error (see mockbamod-module-creator
+ * skill's shadow-gui.md, "Font constraint that matters more under this
+ * theme, not less" - this bit force-webstream's first results page the
+ * same way). Every string sent to the control socket goes through this
+ * first. Disallowed characters become a space (not stripped) so words
+ * don't silently run together. */
+function shadowFontSafe(s) {
+    if (!s) return '';
+    return String(s).toUpperCase().replace(/[^A-Z0-9 .\-/>%+:]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 function padLabel(p) {
-    if (!p || !p.sample) return '(empty)';
-    return p.sample.filename || '(empty)';
+    if (!p || !p.sample) return 'EMPTY';
+    return shadowFontSafe(p.sample.filename) || 'EMPTY';
 }
 
 function padsJson() {
     return JSON.stringify(state.kit.pads.map((p) => ({
         label: padLabel(p),
-        name: p.role || ''
+        name: shadowFontSafe(p.role || '')
     })));
 }
 
 function padInfoText() {
     const p = state.kit.pads[state.padSel];
     if (!p) return '';
-    if (!p.sample) return `Pad ${state.padSel + 1}: empty (${p.role})`;
-    const lock = p.locked ? ' [LOCKED]' : '';
-    return `Pad ${state.padSel + 1}: ${p.sample.filename} (${p.sample.category})${lock}`;
+    if (!p.sample) return shadowFontSafe(`PAD ${state.padSel + 1}: EMPTY - ${p.role}`);
+    const lock = p.locked ? ' - LOCKED' : '';
+    return shadowFontSafe(`PAD ${state.padSel + 1}: ${p.sample.filename} - ${p.sample.category}${lock}`);
 }
 
 /* ---- SET/GET handlers --------------------------------------------------- */
@@ -124,7 +137,7 @@ function doGet(key) {
             const p = state.kit.pads[state.padSel];
             return p && p.locked ? '1' : '0';
         }
-        case 'status': return state.status;
+        case 'status': return shadowFontSafe(state.status);
         default: return '';
     }
 }

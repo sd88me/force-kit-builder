@@ -704,8 +704,180 @@ family.
   `last_export_dir` plumbing was written generically enough that adding
   more prefs fields later doesn't need another `persistPrefs()`-style
   refactor.
-- `render_preview.c` only covers Maze Voice — extending it to take an
-  arbitrary `shadow_page.conf` (or writing a parallel generic tool) would
-  benefit every future addon in this family, not just this one; flagging
-  it here since this project is what surfaced the gap, but it's arguably
-  a `force-shadow` repo issue, not a `force-kit-builder` one.
+- ~~`render_preview.c` only covers Maze Voice~~ — resolved upstream:
+  `force-shadow/tools/render_conf_preview.c` is now a real generic
+  `.conf` preview tool (`style=td3`/`theme_*` aware, every widget kind).
+  Used below to render `shadow_page.conf` after applying the `td3` theme
+  and catching a font-safety bug — see "v2 refinements" below.
+
+## v2 refinements: td3 theme, font-safety (2026-09-22)
+
+Applied `mockbamod-module-creator`'s new default-theme guidance
+(`style=td3`, `force-acid`'s own palette copied verbatim) and rendered
+with `force-shadow/tools/render_conf_preview` before touching anything
+live:
+
+- **Real bug caught by the render**: every button/toggle label
+  (`Lock`, `Reassign`, `Generate All`, `Export Kit`) was mixed-case.
+  `force-shadow`'s baked font (`src/font8x8.h`) only has glyphs for
+  space, `A-Z` (uppercase only), `0-9`, and `. - / > % + :` — anything
+  else silently renders as a blank gap, not an error. Fixed the static
+  labels in `shadow_page.conf` to all-caps, and added a
+  `shadowFontSafe()` sanitizer in `daemon.mjs` for every *dynamic*
+  string sent over the control socket (`pad_info`, pad labels, `status`)
+  — real sample filenames like `Moombahton-Kick-MB Kick 14.WAV` have
+  lowercase letters that would otherwise vanish. `pads`'s JSON payload
+  is sanitized per-field inside `padsJson()`/`padLabel()`, not as a
+  blanket string filter, since blanket-filtering would corrupt the JSON
+  syntax itself (braces/quotes/commas aren't in the allowed charset).
+- The render tool's `list` widget always shows its own hardcoded
+  `force-webstream` fixture data (`"01 YOUTUB"`, `"03 SOUNDC"`, …) —
+  it has no live daemon to query `GET pads` from, so this is expected,
+  not a bug; the real device will show the 16 real pads.
+- A small black box + garbled text renders top-left, unrelated to
+  anything in this `.conf` — confirmed by swapping `display_name` to
+  distinct test text and re-rendering: the artifact didn't move or
+  change. It's leftover chrome hardcoded into the preview tool itself
+  (built for `force-webstream`'s now-playing thumbnail), not something
+  the real on-device renderer draws. Not a `force-kit-builder` bug to
+  fix.
+
+## v3 scoping: audible sample preview via note keys (not yet built)
+
+Asked 2026-09-22: can pads be previewed audibly, ideally by hitting the
+Force's own physical pads (notes 36-51, matching `PAD_MIDI_NOTES`) like a
+normal drum kit, before ever exporting? Answer: yes — this reuses
+`force-audioin`'s existing shared-memory-ring injection mechanism rather
+than inventing new `LD_PRELOAD` code, the same way every other
+sample-triggered voice in this family (Maze Voice, DX7, JV-880) already
+gets audio into the Force's mix. Not yet implemented; this is the plan to
+build from, in the same spirit as the v2 addon's own scoping section
+above.
+
+### Why a separate process, not the existing daemon
+
+`force-audioin/DESIGN.md`'s "Building a new voice producer" section is
+explicit: **a producer must be started only via its own
+`NSMODULE.json`/Modules Manager entry — never from an addon's own boot
+script — and never while `acvs` is about to restart** (the same hard rule
+`force-device-workflow` already enforces for `force-audioin`/Maze). The
+existing `addon/host/daemon.mjs` is deliberately always-on from boot
+(no continuous-engine state to manage, per the v2 scoping) — bolting
+audio production onto it would violate that rule the moment someone
+restarts `acvs` with a preview mid-hit. So this is a **second, separate
+process** (`addon/host/preview` — name pending), gated behind the
+Modules Manager like `dx7_host`/`maze_host` are, `AUTOLAUNCHABLE: false`.
+
+### Why native C++, not Node
+
+Every existing producer (`injectTone.c`, `maze_host.cpp`, `dx7_host.cpp`)
+is a native C/C++ binary using `shm_open`/`mmap` directly against
+`ai_shm_t`'s exact struct layout (`force-audioin/src/forceAudioInject.h`),
+including a hand-rolled SPSC ring with specific acquire/release memory-
+ordering semantics on the `head`/`tail` fields. Node has no built-in POSIX
+shared-memory/mmap binding, and this device has no working path to add
+one (no npm registry access, no on-device compiler for a native addon —
+see `mockbamod-module-creator` skill's cross-compile-via-Docker+QEMU
+convention every native piece in this family already uses). Matching
+existing precedent exactly — vendor `forceAudioInject.h` byte-for-byte,
+write a small C++ binary, cross-compile the same way `force-shadow`'s
+`.so` and `force-dx7`'s `dx7_host` already do — is both lower-risk and
+less new surface area than trying to be the first Node producer in this
+family.
+
+### MIDI input: reuse the family's own established pattern, don't invent one
+
+`force-maze/maze-voice/src/maze_host.cpp` already solves "receive note
+input from a Force pad/track" — `RtMidiIn::openVirtualPort("In (Mockba)")`
++ `setCallback()`, vendored `rtmidi/RtMidi.h` (already present in this
+family's other repos, e.g. `force-maze/maze-voice/src/rtmidi/`). This is
+the standard MPC workflow: the user routes a track's MIDI output to the
+new virtual port ("KIT BUILDER PREVIEW" or similar) the same way they'd
+route to any external instrument — physically hitting that track's pads
+then sends real note-on messages (0x90, note, velocity) to our producer.
+**This is not a passive tap of raw physical pad hits** — nothing in this
+family intercepts those directly; every existing voice addon works this
+same routed-track way, so this isn't a new UX pattern for anyone already
+using Maze Voice or DX7 on this device.
+
+### Producer flow (v1: monophonic, last-note-wins)
+
+1. `RtMidiIn` callback receives `0x90 <note> <velocity>`. Ignore anything
+   outside `36..51` (matches `PAD_MIDI_NOTES`) and any note-off (`0x80`,
+   or `0x90` with velocity 0).
+2. `note - 36` = pad index. Open a short-lived connection to the
+   *existing* `/tmp/kitbuilder_ctrl.sock` and ask for that pad's real
+   file path — needs one new daemon protocol key (see below) rather than
+   the C++ producer re-reading/parsing `current-kit.json` itself
+   (`daemon.mjs` already owns that state correctly, including the
+   per-request `syncKit()` freshness fix from v2 — no reason to duplicate
+   that logic in C++).
+3. Decode the WAV (from-scratch parse, same spirit as
+   `core/wav_info.mjs`/`core/wav_peaks.mjs` but in C++ — 16-bit PCM
+   mono/stereo covers the real sample library based on what's already
+   been seen live: `Moombahton-Kick-MB Kick 14.WAV` etc.). Convert to
+   interleaved float32 at a fixed declared rate — 44100 stereo is the
+   simplest choice and matches `AI_MAX_CH`.
+4. Write into `/forceAudioInject3` (see slot accounting below) — resets
+   `head`/writes fresh samples on every note-on, so a fast re-hit cuts
+   off whatever was still playing rather than layering (true polyphony —
+   mixing multiple concurrently-playing pad hits in software before one
+   ring write — is a real v2 extension, not v1; flagging so "why does a
+   fast roll cut itself off" doesn't look like a bug later).
+5. `enabled=1`, `gain` fixed at `1.0` for v1 (no per-pad level control
+   yet — `playback.gain` already exists on the kit's own pad data model
+   for the *exported* XPM; wiring that same value into the preview's
+   `gain` field is an obvious v2 tie-in, not done here).
+
+### New daemon protocol key
+
+Add `GET pad_path` (raw, **not** run through `shadowFontSafe()` — that
+sanitizer is display-only and would corrupt a real filesystem path) —
+returns the currently-selected pad's `sample.filesystem_path`, empty
+string if the pad has no sample. The C++ producer does `SET pad_sel <n>`
+then `GET pad_path`, exactly mirroring how the shadow page itself already
+selects a pad — no new selection concept, just a second consumer of the
+one that exists.
+
+### Ring slot: 3 (needs live confirmation)
+
+Confirmed by grepping sibling repos' own source comments (not
+guessed): `force-dx7/src/dx7_host.cpp`'s own comment states the
+existing assignment — `0 = Maze Voice, 1 = JV-880, 2 = DX7`. Slot `3` is
+the last of `AI_MAX_VOICES` (4) and appears unclaimed by anything in this
+device's addon family as of this scoping — **but this device was
+unreachable when writing this** (`ssh: connect to host 192.168.1.187
+port 22: No route to host`, 2026-09-22), so confirm live
+(`ls /dev/shm/forceAudioInject*` and cross-check every installed voice
+addon's own `NSMODULE.json` `--mix-slot` argument) before building
+against slot 3, the same way the v2 addon's `page=1` assumption turned
+out wrong until checked against the real device.
+
+### Real UX dependency, not a shortcut around it
+
+Injected audio lands on `MPC`'s *capture* path — same as every other
+voice in this family — so it's only actually audible if the current
+Force project has an Audio-In track listening to it, same one-time
+per-project setup Maze Voice/DX7 users already do. Not a new burden this
+project introduces, just worth stating plainly rather than implying
+"hit a pad, hear it" is fully automatic with zero project-side setup.
+
+### Open items before implementation
+
+- [ ] Live-confirm ring slot 3 is actually free (see above).
+- [ ] Decide the producer's binary/addon name and folder shape
+      (`addon/host/preview_host.cpp`? a fully separate
+      `AddOns/ForceKitBuilderPreview/`? — lean toward keeping it inside
+      `ForceKitBuilder/` alongside `daemon.mjs`, matching how DX7 keeps
+      `dx7_host` and its web/shadow surfaces in one addon folder, but not
+      decided).
+- [ ] `NSMODULE.json` `--ctrl-sock`/`--mix-slot`-style `ARGUMENTS`, once
+      the slot is confirmed.
+- [ ] WAV decode coverage: confirm the real sample library's formats
+      (bit depth, mono/stereo mix) are fully covered by a straight port of
+      `wav_info.mjs`'s parsing logic — it already handles the odd-chunk/
+      truncated/no-data-chunk edge cases `tests/test_wav_info.js` covers;
+      re-verify those same edge cases still hold once ported to C++.
+- [ ] Render the eventual `shadow_page.conf` addition (if the preview
+      gets its own visual state, e.g. a "PREVIEWING" indicator) with
+      `render_conf_preview` before deploying, same discipline as v2.
