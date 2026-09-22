@@ -11,13 +11,15 @@
 # v4.1 (2026-09-23), after live-device testing surfaced real bugs no
 # offline render caught:
 #
-# - MAX_FRAMES is 6 per tab (force_shadow.c), a SEPARATE cap from the
+# - MAX_FRAMES was 6 per tab (force_shadow.c), a SEPARATE cap from the
 #   64-widget MAX_WIDGETS one - frames don't count against MAX_WIDGETS,
-#   but they have their own budget, silently dropped past 6
+#   but they had their own budget, silently dropped past 6
 #   (`if (n_page_frames >= MAX_FRAMES) return;`, no error, no log). The
 #   original 16-pad-one-page PADS design had 16 frames; only the first 6
-#   rendered on real hardware. PADS is now split into three pages of up
-#   to 6 pads each (PADS 1-6 / 7-12 / 13-16), each safely under the cap.
+#   rendered on real hardware. First fix split PADS into three pages of
+#   up to 6 pads each - superseded a day later (see "v4.2" below) once
+#   MAX_FRAMES was raised instead, since a single 16-pad page was what
+#   was actually wanted; kept as design history, not live code.
 # - The real per-character text-advance at scale 1.5 is a BAKED CONSTANT,
 #   FONT_HI_1_5_W = 10 (src/font_hi.h), not the preview tool's own
 #   approximation (`(GLYPH_CELL+1)*scale-scale` = ~15/char) - the two
@@ -41,11 +43,24 @@ CATEGORIES = [
     ('other', 'OTHER'),
 ]
 
-HEADER = '''# ForceKitBuilder — shadow-GUI page (v4.1: four pages - PADS 1-6 / 7-12 /
-# 13-16 performance grids + DETAIL single-pad view). See DESIGN.md's "v4"
-# and "v4.1" sections for the full redesign history and the real bugs
-# live-device testing caught that no offline render could (MAX_FRAMES=6
-# per tab, the preview tool's inaccurate font-width approximation).
+HEADER = '''# ForceKitBuilder — shadow-GUI page (v4.2: two pages - a single 16-pad
+# PADS performance grid + DETAIL single-pad view). See DESIGN.md's "v4",
+# "v4.1", and "v4.2" sections for the full redesign history and the real
+# bugs live-device testing caught that no offline render could.
+#
+# v4.2 (2026-09-23, later same day): back to one 16-pad PADS page -
+# force-shadow's own MAX_FRAMES was raised from 6 to 20 (src/
+# force_shadow.c, this repo's own upstream constant, rebuilt and
+# redeployed) rather than working around it with three pages. Checked
+# before raising, not just bumped blind: page_frames et al are
+# duplicated per-tab across all 40 addon slots x 8 tabs
+# (tab_snapshot_t's data_addon_tabs[] table) - the extra 14 frames add
+# ~125KB total, negligible next to that same table's ~11MB
+# MAX_WIDGETS-driven allocation. MAX_WIDGETS=64 is unchanged and is a
+# real constraint again at 16 pads/page: back to 3 controls per pad
+# (LOCK/REROLL/PLAY), CLEAR doesn't fit alongside the top-bar "last
+# played" readout on one 16-pad page, same tradeoff v4's first pass
+# already made for the same reason.
 #
 # page=8, not 1-7: only seven SHIFT+SCENE-N combos physically exist, and
 # on the real device all seven were already taken (DX7, JV-880, Maze
@@ -143,53 +158,47 @@ def button_width(label):
     return text_width_1_5(label) + 36 + 24   # +24 only applies in td3, which this page always uses
 
 
-# ---- PADS pages: up to 6 pads each, 3 cols x 2 rows -----------------------
-# MAX_FRAMES=6 per tab (see HEADER) forces splitting 16 pads across three
-# pages instead of one - 6+6+4. Each pad now gets a bigger cell (was
-# 295x150 in the single-page design), enough room to bring CLEAR back:
-# widget count is no longer the binding constraint for 6 pads (6*4+1=25,
-# far under MAX_WIDGETS=64) the way it was for 16 pads on one page.
-PADS_PER_PAGE = 6
-PADS_COLS, PADS_ROWS = 3, 2
-PADS_CELL_W, PADS_CELL_H = 400, 313
-PADS_GAP_X, PADS_GAP_Y = 20, 20
-PADS_X0, PADS_Y0 = 20, 82
+# ---- PADS page: single tab, 16 pads, 4 cols x 4 rows -----------------------
+# MAX_FRAMES is 20 now (force-shadow's own src/force_shadow.c, raised
+# from 6 - see HEADER), so all 16 per-pad frames fit on one tab; asserted
+# below rather than just assumed. MAX_WIDGETS=64 is still real though:
+# 16 pads x 4 controls would be exactly 64 with zero room for the top-bar
+# "last played" readout this page also needs - CLEAR stays on DETAIL,
+# same tradeoff as v4's original single-page design.
+MAX_FRAMES = 20   # force-shadow/src/force_shadow.c's own constant, mirrored here for the assert below
+PADS_ROW_Y = [82, 244, 406, 568]
+PADS_COL_X = [20, 335, 650, 965]
+PADS_CELL_W, PADS_CELL_H = 295, 150
 
 
 def pads_cell(pad_num, pad_index, x, y):
-    # Left column = PLAY (big, spans most of the cell's height). Right
-    # column = LOCK/REROLL/CLEAR stacked - three rows fit comfortably now
-    # that cells are much taller (313px vs the old single-page design's
-    # 150px). Content must start below the frame's title/divider
-    # (y+38+margin) - checked explicitly, not assumed, after DETAIL's
-    # pad-selector row was found overlapping its own frame's title.
-    content_top = y + FRAME_TITLE_DIVIDER_Y + FRAME_CONTENT_TOP_MARGIN
-    content_bottom = y + PADS_CELL_H - 16
+    # Left half = PLAY, right half = LOCK over REROLL, stacked. PLAY's
+    # label is not padded - a padded label bled into the neighbouring
+    # pad's column in an earlier draft (checked with the real
+    # text_width_1_5() formula this time, not the preview tool's ~50%-
+    # too-generous approximation that produced that bug originally).
     left_cx = x + PADS_CELL_W // 4
     right_cx = x + (PADS_CELL_W * 3) // 4
-    play_cy = (content_top + content_bottom) // 2
-    row_h = (content_bottom - content_top) // 3
-    lock_cy = content_top + row_h // 2
-    reroll_cy = content_top + row_h + row_h // 2
-    clear_cy = content_top + 2 * row_h + row_h // 2
+    mid_cy = y + 92
+    lock_cy = y + 68
+    reroll_cy = y + 118
     return '\n'.join([
         f'frame   x={x} y={y} w={PADS_CELL_W} h={PADS_CELL_H} title="PAD {pad_num}"',
-        f'button  cx={left_cx} cy={play_cy} label="PLAY" key=play_pad_{pad_index} color={ACCENT_HEX}',
+        f'button  cx={left_cx} cy={mid_cy} label="PLAY" key=play_pad_{pad_index} color={ACCENT_HEX}',
         f'toggle  cx={right_cx} cy={lock_cy} label="LOCK" key=pad_lock_{pad_index}',
         f'button  cx={right_cx} cy={reroll_cy} label="REROLL" key=reroll_pad_{pad_index}',
-        f'button  cx={right_cx} cy={clear_cy} label="CLEAR" key=clear_pad_{pad_index}',
     ])
 
 
-def pads_page(tab_name, pad_indices):
-    assert len(pad_indices) <= PADS_PER_PAGE, f'{tab_name}: {len(pad_indices)} pads exceeds MAX_FRAMES={PADS_PER_PAGE}'
-    lines = [f'[tab {tab_name}]', TOPBAR_LASTPLAYED, '']
-    for slot, pad_index in enumerate(pad_indices):
-        col, row = slot % PADS_COLS, slot // PADS_COLS
-        x = PADS_X0 + col * (PADS_CELL_W + PADS_GAP_X)
-        y = PADS_Y0 + row * (PADS_CELL_H + PADS_GAP_Y)
-        lines.append(pads_cell(pad_index + 1, pad_index, x, y))
-        lines.append('')
+def pads_page():
+    assert 16 <= MAX_FRAMES, f"16 pad frames exceeds force-shadow's MAX_FRAMES={MAX_FRAMES}"
+    lines = ['[tab PADS]', TOPBAR_LASTPLAYED, '']
+    for row in range(4):
+        for col in range(4):
+            pad_index = row * 4 + col
+            x, y = PADS_COL_X[col], PADS_ROW_Y[row]
+            lines.append(pads_cell(pad_index + 1, pad_index, x, y))
+            lines.append('')
     return '\n'.join(lines).rstrip() + '\n'
 
 
@@ -282,16 +291,9 @@ def detail_tab():
     return '\n'.join(lines) + '\n'
 
 
-def pads_pages():
-    all_indices = list(range(16))
-    chunks = [all_indices[i:i + PADS_PER_PAGE] for i in range(0, 16, PADS_PER_PAGE)]
-    names = ['PADS 1-6', 'PADS 7-12', 'PADS 13-16']
-    return '\n'.join(pads_page(name, chunk) for name, chunk in zip(names, chunks))
-
-
 if __name__ == '__main__':
     import sys
-    out = HEADER + '\n' + pads_pages() + '\n' + detail_tab()
+    out = HEADER + '\n' + pads_page() + '\n' + detail_tab()
     dest = sys.argv[1] if len(sys.argv) > 1 else '/dev/stdout'
     with open(dest, 'w') as f:
         f.write(out)

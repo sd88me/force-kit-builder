@@ -1509,3 +1509,83 @@ protocol tested against real device data post-deploy (`detail_pad_name`,
 `force_shadow.log`: `"KIT BUILDER" ... 2 tab(s)` for the v4 deploy, this
 revision's device-side re-verification (4 tabs, all pad boxes, spacing
 fixes) is the natural next check once back on the device.
+
+## v4.2: back to one PADS page — raised force-shadow's own MAX_FRAMES (2026-09-23, later same day)
+
+v4.1's 6-frame cap fix (three PADS pages) worked, but wasn't what was
+actually wanted after seeing it: "still need the 16 pads as before with
+16 boxes... change the max limit to suit." Since `MAX_FRAMES` is a
+`#define` in **this user's own** `force-shadow` repo, not a fixed
+third-party constraint, raising it directly was a real option — done
+carefully, since `force_shadow.so` is shared infrastructure for every
+addon on the device (DX7, Maze Voice, Euclidier, …), not just Kit
+Builder, so a bad change here has a much wider blast radius than
+anything scoped to this repo alone.
+
+### Checked before raising, not just bumped blind
+
+`page_frames`/`frames`/`frames_snap` (all sized `[MAX_FRAMES]`) are
+duplicated per-tab in `tab_snapshot_t`'s `data_addon_tabs[NUM_ADDON_SLOTS]
+[MAX_TABS]` table — 40 slots × 8 tabs = 320 copies. Computed the real
+memory impact rather than assuming "small `#define`, must be fine":
+raising `MAX_FRAMES` 6→20 adds `(20-6) × sizeof(ui_frame_t) × 320 ≈
+125KB` — negligible next to that same table's `MAX_WIDGETS`-driven
+allocation (`64 × sizeof(ui_widget_t) × 320`, already **~11MB** for the
+widgets array alone). Picked 20 (room for 16 pads plus headroom for
+whatever else might want more than 6 frames later) rather than the
+exact number this one addon happens to need right now — same reasoning
+`MAX_WIDGETS=64` already reflects for widgets.
+
+### Rebuilt and verified
+
+- `force-shadow/src/force_shadow.c`: `MAX_FRAMES` 6 → 20, with the memory
+  math above written into the comment at the definition site, not just
+  here.
+- Rebuilt `force_shadow.so` via the exact documented recipe (`README.md`'s
+  Docker + QEMU armhf command, `arm32v7/debian:stretch`) — only the
+  pre-existing, unrelated warnings (misleading-indentation on other
+  functions, one unused function), no new ones. Verified the rebuilt
+  `.so`'s dependency profile is unchanged (`readelf -d`: still exactly
+  `libdl`/`libpthread`/`libc`) before trusting it.
+- Rebuilt `tools/render_conf_preview` natively too, so offline testing
+  stayed accurate against the updated source (it has no `MAX_FRAMES`
+  equivalent of its own to update — confirmed by grep, it never enforced
+  a frame cap at all, which is part of why v4.1's bug wasn't caught
+  offline in the first place).
+
+### Kit Builder side: single PADS page again
+
+`tools/gen_shadow_page.py`'s v4.1 three-page split
+(`pads_page()`/`PADS_PER_PAGE`) replaced with the original v4 single-tab
+16-pad 4×4 grid (`pads_cell()`), titles updated to `"PAD N"` (was just
+`"N"` — a plain, no-real-constraint-behind-it fix asked for at the same
+time). `MAX_WIDGETS=64` is unchanged and is the real constraint again at
+16 pads on one page: 16×4 controls would be exactly 64 with zero room
+for the top-bar "last played" readout, so CLEAR still doesn't fit here —
+same tradeoff v4's very first pass already made, for the same reason.
+Added an explicit `assert(16 <= MAX_FRAMES)` (mirroring
+`force_shadow.c`'s own constant as a Python constant, since the
+generator has no way to read the real `#define`) so a future
+`force-shadow` downgrade or a Kit Builder pad-count increase fails loudly
+at generation time instead of silently dropping frames again.
+
+### Verified
+
+Regenerated conf renders cleanly with the rebuilt preview tool: all 16
+pad boxes visible (pad 16's REROLL button label still doesn't render in
+this *specific offline tool* — confirmed still the same benign
+preview-tool-only 64-line buffer limit from v4.1's section above, unrelated
+to `MAX_FRAMES` and already confirmed absent from `force_shadow.c`'s own
+parser). `clear_pad_N` removed from `daemon.mjs` again (dead once more -
+PADS reverted to 3 controls). Full `tests/run.js` suite (104 cases)
+still passes.
+
+**Not yet deployed** — `force_shadow.so`, `shadow_page.conf`, and
+`daemon.mjs` all need staging to the device (the `.so` especially
+carefully, per `force-shadow/README.md`'s own warning: upload to a
+`.new` filename and `mv` into place, never `scp` directly over a
+currently-loaded one) before this can be verified live. This is a
+larger-blast-radius deploy than any prior pass in this file — it touches
+every addon on the device's shadow-GUI rendering, not just Kit
+Builder's — worth extra care checking `force_shadow.log` afterward for
+every addon's page, not just this one's.

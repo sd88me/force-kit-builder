@@ -27,13 +27,14 @@
  * single-pad view) - see DESIGN.md's "v4" section for the full redesign
  * history and the sketches it came from.
  *
- * PADS pages (v4.1: three pages of up to 6 pads each, not one page of
- * 16 - force_shadow.c's MAX_FRAMES=6 per-tab cap, separate from the
- * 64-widget MAX_WIDGETS cap, forced the split - see shadow_page.conf's
- * header): per-pad-indexed keys (pad_lock_0..15, reroll_pad_0..15,
- * clear_pad_0..15, play_pad_0..15, pad_path_0..15) - each pad box has
- * its own LOCK/REROLL/CLEAR/PLAY directly, so there's no selection state
- * to track for these.
+ * PADS page (v4.2: back to one 16-pad page - force-shadow's own
+ * MAX_FRAMES was raised from 6 to 20 rather than keeping the v4.1
+ * three-page split; see shadow_page.conf's header): per-pad-indexed keys
+ * (pad_lock_0..15, reroll_pad_0..15, play_pad_0..15, pad_path_0..15) -
+ * each pad box has its own LOCK/REROLL/PLAY directly, so there's no
+ * selection state to track for these. CLEAR isn't exposed here - 16 pads
+ * x 4 controls is exactly MAX_WIDGETS=64 with zero room for the top-bar
+ * "last played" readout this page also needs; lives on DETAIL only.
  *
  * DETAIL page: selection-based keys instead (detail_pad_sel/
  * detail_pad_name/detail_pad_count/detail_sample_info/detail_gain/
@@ -190,7 +191,7 @@ const CATEGORY_RE = /^detail_cat_(.+)$/;
  * header comment) replaced that with per-pad-indexed keys instead: no
  * selection state to track, each widget just names its own pad index. */
 
-const PAD_KEY_RE = /^(pad_lock|pad_path|reroll_pad|clear_pad)_(\d+)$/;
+const PAD_KEY_RE = /^(pad_lock|pad_path|reroll_pad)_(\d+)$/;
 
 function doGet(key) {
     const m = key.match(PAD_KEY_RE);
@@ -266,12 +267,6 @@ function doSet(key, value) {
             return { ok: true, msg: '' };
         }
         if (kind === 'reroll_pad') return rerollOnePad(i);
-        if (kind === 'clear_pad') {
-            const r = kitModel.clearPad(state.kit, i);
-            if (r === 'cleared') persistKit();
-            state.status = `Pad ${i + 1}: ${r}.`;
-            return { ok: true, msg: state.status };
-        }
         return { ok: false, msg: 'read-only key: ' + key };
     }
 
