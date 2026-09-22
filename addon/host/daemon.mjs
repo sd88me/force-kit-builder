@@ -116,9 +116,14 @@ function shadowFontSafe(s) {
 function padInfoText(i) {
     const p = state.kit.pads[i];
     if (!p) return '';
-    if (!p.sample) return shadowFontSafe(`EMPTY - ${p.role}`);
+    /* Pad number prefixed unconditionally, not just when there's no frame
+     * title to show it otherwise - keeps this function layout-agnostic
+     * (the 16-pads-one-tab layout has no per-pad frame/title at all, see
+     * DESIGN.md). Redundant-but-harmless alongside a frame's own "PAD N"
+     * title in the two-tab layout. */
+    if (!p.sample) return shadowFontSafe(`${i + 1}: EMPTY - ${p.role}`);
     const lock = p.locked ? ' - LOCKED' : '';
-    return shadowFontSafe(`${p.sample.filename} - ${p.sample.category}${lock}`);
+    return shadowFontSafe(`${i + 1}: ${p.sample.filename} - ${p.sample.category}${lock}`);
 }
 
 /* ---- SET/GET handlers ---------------------------------------------------

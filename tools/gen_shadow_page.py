@@ -62,12 +62,12 @@ theme_line=2e2e2e
 theme_ink=f2f2f2
 theme_ink_dim=aaaaaa
 theme_ink_faint=666666
-theme_accent=00b8d4
-theme_accent_hi=4dd0e1
+theme_accent=ff8f00
+theme_accent_hi=ffb74d
 theme_knob_face=2a2a2a
 theme_knob_ring=000000
 theme_bar=2a2a2a
-theme_seg_active=00b8d4
+theme_seg_active=ff8f00
 theme_seg_inactive=2a2a2a
 theme_seg_active_tx=000000
 theme_btn_text=ffffff
@@ -115,6 +115,47 @@ def pads_tab(name, start_pad_num):
     return '\n'.join(out).rstrip() + '\n'
 
 
+# ---- alternate layout: all 16 pads on one tab, no per-pad frame -----------
+# readout + toggle + 2 buttons, x16 = 64 widgets - exactly the format's
+# per-tab cap, zero widgets left over for a frame/title per pad (that's
+# what padInfoText()'s own pad-number prefix is for instead - see
+# daemon.mjs). GLOBAL actions still need their own separate tab; this
+# only consolidates the 16 pads themselves down from two tabs to one.
+ALL16_COLS = 4
+ALL16_ROWS = 4
+ALL16_CELL_W, ALL16_CELL_H = 295, 150
+ALL16_GAP_X, ALL16_GAP_Y = 14, 10
+ALL16_X0, ALL16_Y0 = 20, 85
+
+
+def pad_cell_noframe(pad_index, x, y):
+    ro_cx = x + ALL16_CELL_W // 2
+    ro_cy = y + 30
+    lock_cx = x + 50
+    reroll_cx = x + ALL16_CELL_W // 2
+    clear_cx = x + ALL16_CELL_W - 50
+    ctrl_cy = y + 100
+    lines = [
+        f'readout cx={ro_cx} cy={ro_cy} w=275 h=40 label="" get=pad_info_{pad_index}',
+        f'toggle  cx={lock_cx} cy={ctrl_cy} label="LOCK" key=pad_lock_{pad_index}',
+        f'button  cx={reroll_cx} cy={ctrl_cy} label="REROLL" key=reroll_pad_{pad_index}',
+        f'button  cx={clear_cx} cy={ctrl_cy} label="CLEAR" key=clear_pad_{pad_index}',
+    ]
+    return '\n'.join(lines)
+
+
+def pads_tab_all16():
+    out = ['[tab PADS]']
+    for row in range(ALL16_ROWS):
+        for col in range(ALL16_COLS):
+            pad_index = row * ALL16_COLS + col
+            x = ALL16_X0 + col * (ALL16_CELL_W + ALL16_GAP_X)
+            y = ALL16_Y0 + row * (ALL16_CELL_H + ALL16_GAP_Y)
+            out.append(pad_cell_noframe(pad_index, x, y))
+            out.append('')
+    return '\n'.join(out).rstrip() + '\n'
+
+
 def global_tab():
     frame_x, frame_y, frame_w, frame_h = 200, 82, 880, 440
     cx = frame_x + frame_w // 2
@@ -135,8 +176,17 @@ def global_tab():
 
 if __name__ == '__main__':
     import sys
-    out = HEADER + '\n' + pads_tab('PADS 1-8', 1) + '\n' + pads_tab('PADS 9-16', 9) + '\n' + global_tab()
-    dest = sys.argv[1] if len(sys.argv) > 1 else '/dev/stdout'
+    args = sys.argv[1:]
+    one_page = '--one-page' in args
+    args = [a for a in args if a != '--one-page']
+    if one_page:
+        # Comparison layout - all 16 pads on one tab (no per-pad frame,
+        # exactly 64 widgets), GLOBAL still separate. Not the committed
+        # default; generate explicitly to compare against the 2-tab layout.
+        out = HEADER + '\n' + pads_tab_all16() + '\n' + global_tab()
+    else:
+        out = HEADER + '\n' + pads_tab('PADS 1-8', 1) + '\n' + pads_tab('PADS 9-16', 9) + '\n' + global_tab()
+    dest = args[0] if args else '/dev/stdout'
     with open(dest, 'w') as f:
         f.write(out)
     print(f'wrote {dest}', file=sys.stderr)
