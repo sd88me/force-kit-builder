@@ -1240,3 +1240,153 @@ the orange accent, not a clashing third colour.
 file — a live touchscreen tap on `POOL ASSIGN`'s toggles, and whether
 the 8×2 pad-select list reads comfortably at native resolution with 16
 real (not fixture) items.
+
+## v4: two pages, from hand-drawn sketches (2026-09-22, same day)
+
+Superseded the four-tab design above entirely — PADS 1-8/9-16, GLOBAL,
+and POOL ASSIGN collapse into two pages: **PADS** (a 16-pad performance
+grid) and **DETAIL** (a single-pad deep-edit view with the category
+matrix folded in). Started from two hand-drawn sketches, iterated through
+several real-render-caught mistakes before landing on the version below.
+`tools/gen_shadow_page.py` was rewritten to generate this directly (the
+old `pads_tab()`/`global_tab()`/`pool_tab()` functions and the
+`--one-page` comparison mode are gone — that whole exploration is this
+git history now, not live code to keep working).
+
+### Why two pages, not four
+
+The sketches proposed: a dense PADS summary for fast in-the-moment
+control, and one DETAIL page holding everything else (pad-specific
+editing, category assignment, kit-wide actions) — reached via pad-by-pad
+navigation instead of tab-switching. Also asked for: PLAY's last-played
+sample name to persist visibly on the PADS page, and the category-editing
+UI to live *inside* per-pad detail instead of as its own separate tab.
+
+### PADS page: 16-pad grid, three controls each
+
+Each of the 16 pads gets its own box (frame — confirmed free against the
+real device's widget cap, see below) with PLAY (left half) and LOCK/
+REROLL stacked (right half). **CLEAR is not on this page** — 16 pads ×
+4 controls is exactly the format's 64-widget cap, with zero room left for
+the top-bar "last played" readout this page also needs. Dropped CLEAR
+(kept on DETAIL) rather than the readout: LOCK/REROLL/PLAY are the
+"in-the-moment" actions this page is for, CLEAR fits DETAIL's editing
+role better. 16×3 + 1 = 49 widgets, comfortable headroom.
+
+"Last played persists in the top bar": `play_pad_N` (and DETAIL's
+`detail_play`) now funnel through a shared `playPadAndAnnounce()` in
+`daemon.mjs` — on a successful play, it sets `state.status` to that pad's
+sample info, and the *same* top-bar `status` readout (`TOPBAR_LASTPLAYED`)
+is repeated on both pages, so it survives switching pages, exactly the
+"persist" behaviour asked for.
+
+### DETAIL page: stepper nav + full category matrix + kit actions
+
+Top-left: the 23-category toggle matrix (unchanged from the POOL ASSIGN
+design above — same Euclidier-precedent multi-select toggles). Top-right:
+the four kit-wide actions (GENERATE ALL/CLEAR ALL/NORMALISE/EXPORT KIT),
+now a vertical stack instead of the old GLOBAL tab's own page. Bottom: a
+full-width bar with a `◄ PAD ►` stepper (same widget DX7 uses for patch
+browsing) for pad navigation, a GAIN knob, a wide sample-name readout, and
+LOCK/CLEAR/REROLL/PLAY.
+
+This is the one place selection state genuinely can't be avoided — one
+stepper-driven "current pad" (`state.detailSel`, renamed from the old
+`poolSel`) instead of 16 pads' worth of individual category grids, which
+was never going to fit. Category writes still go through
+`core/storage.mjs`'s existing `savePadLayoutEntry()` — same function, just
+addressed by `state.detailSel` instead of a dedicated list-widget
+selection.
+
+### Real bugs the renders caught, iterating with the sketches
+
+- **First pass** (single-column PADS summary list + narrow DETAIL
+  column): rendered, shown, and explicitly rejected — not what the
+  sketches meant. Correction: PADS should reuse the *previous* per-pad-box
+  design, split in half for 16 instead of 8; DETAIL's controls needed to
+  be a full-width bottom bar, not a narrow side column.
+- **Preview-tool-only line-buffer limit**: the tool's own line-storage
+  array is capped at 64 conf *lines* per tab (`MAX_LINES_PER_TAB` in
+  `render_conf_preview.c`), and unlike the real device's widget cap, it
+  does **not** exempt `frame` lines. PADS has 65 total lines (16 frames +
+  48 controls + 1 topbar readout), so the tool silently drops the last
+  line (pad 16's REROLL) from the *render* only — confirmed by reading
+  `force_shadow.c`'s own line-by-line parser, which has no equivalent
+  buffer. Documented in `gen_shadow_page.py`'s header rather than chasing
+  it further; the real device is unaffected.
+- **Padded PLAY button overflowed its own cell**: a padded
+  `"   PLAY   "` label computes to 208px wide (`text_width()`'s real
+  formula, not guessed) — fine on DETAIL's ~1240px-wide bottom bar, but
+  PADS' pad cells are only ~295px, and PLAY's left-half zone is ~147px.
+  The padded version bled into the *previous* pad's column. Fixed by
+  leaving PADS' PLAY unpadded (fits at ~118px) and keeping the padding
+  only where there's room (DETAIL's bar) — checked with the same formula
+  before re-rendering, not by guessing a smaller pad count.
+- **DETAIL's second control row overlapped itself**: first draft crammed
+  LOCK/CLEAR/REROLL into the bar's rightmost ~300px; REROLL's pill visibly
+  clipped into CLEAR's, and the label text sat too close to the frame's
+  own divider line above it. Fixed by spreading all three across the
+  bar's full width (~300px berth each) and adding vertical clearance
+  below the frame's title/divider zone (`y+38`, same fix pattern as
+  POOL ASSIGN's frame-title collision earlier).
+- **Knob-as-PLAY-trigger, explored and ruled out**: asked whether a knob
+  could substitute for PLAY to get a true circular/square feel. Checked
+  `force_shadow.c`'s touch handler directly rather than guessing: `case
+  W_KNOB: active_widget = i; drag_start_py = lpy; ...` only *arms* a drag
+  on touch-down — nothing fires without movement, so a plain tap on a
+  knob does nothing. Not viable as a trigger. PLAY stays a `button`,
+  whose height is fixed (48px, td3-style) with no `w=`/`h=` override in
+  the real conf parser — width-padding where there's room is the real
+  ceiling for "bigger" in this format, not a preference.
+
+### Backend rewrite (`daemon.mjs`)
+
+- **Removed** (genuinely dead once the new pages don't reference them):
+  `pad_info_N` (GET, per-index — PADS dropped its readout entirely,
+  DETAIL uses the non-indexed `detail_sample_info` instead),
+  `clear_pad_N` (SET, per-index — PADS dropped CLEAR, DETAIL's
+  `detail_clear` is selection-based instead), and the old POOL ASSIGN
+  tab's `pool_pads`/`pool_pad_sel`/`pool_editing_label`/`pool_reset` (no
+  list widget or RESET button in the new DETAIL layout).
+- **Kept unchanged**: `pad_lock_N`/`reroll_pad_N`/`play_pad_N`/
+  `pad_path_N` (PADS page, and `pad_path_N` also still serves
+  `preview_host`'s ctrl-socket lookups, untouched by any of this).
+- **Added**: `detail_pad_sel`/`detail_pad_name`/`detail_pad_count`
+  (stepper backing), `detail_sample_info` (readout), `detail_gain`
+  (GET/SET knob — reads/writes `pad.playback.gain` via the already-
+  existing `kitModel.setPadGain()`), `detail_lock`/`detail_clear`/
+  `detail_reroll`/`detail_play` (selection-based equivalents of the old
+  per-index actions, all reusing existing functions —
+  `kitModel.toggleLock()`/`clearPad()`, the existing `rerollOnePad()`,
+  `playPadAndAnnounce()`), `detail_cat_<category>` (renamed from
+  `pool_cat_<category>`, same logic).
+
+### Verified
+
+Full protocol tested end-to-end against a real `daemon.mjs` (Docker
+fixture harness, same pattern as every prior pass): per-pad PADS keys
+still work (`pad_lock_N` toggles and persists, `reroll_pad_N` reassigns),
+dead keys confirmed actually gone (`pad_info_0` returns empty,
+`clear_pad_0` returns `ERR unknown key`), and the full `detail_*` set —
+pad navigation changes `detail_pad_name`/`detail_sample_info`/
+`detail_gain` together correctly (gain is genuinely per-pad, confirmed
+pad 4 shows default 1.0 after setting pad 1 to 1.5), lock/clear/reroll
+all operate on whichever pad `detail_pad_sel` currently points at,
+category toggle correctly flips membership either direction (including
+correctly *removing* an already-present default category, not just
+adding new ones — caught what looked like a bug in first testing but was
+actually a wrong test assumption about pad 6's default pool). `play_pad_N`
+and `detail_play` both fail gracefully with no `preview_host` running and
+correctly update `status` with sample info when they succeed. Full
+`tests/run.js` suite (104 cases, unaffected — none of this touched
+`core/`) still passes. Both pages render together with zero warnings.
+
+**Not yet deployed to the real device** — same limitation as every prior
+pass in this file, no SSH access to a MockbaMod Force in this
+environment. This is the next real step: deploy `shadow_page.conf` +
+`daemon.mjs` + `preview_host` (already deployed once before, unaffected
+by this page redesign) and verify live, including the two things no
+amount of offline testing can exercise — pad 16's REROLL actually
+rendering on real hardware (confirmed not a real constraint, but still
+worth eyeballing) and whether GAIN's knob-drag gesture feels right on an
+actual touchscreen.

@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
-# Generates addon/shadow_page.conf's pad tabs programmatically - readout
-# widgets take cx/cy (center point), not x/y (top-left), confirmed against
-# force-shadow/src/force_shadow.c's real parser (frame/list use x/y;
-# everything else uses cx/cy). Doing this by hand for 16 pads is exactly
-# how the first draft got it wrong.
+# Generates addon/shadow_page.conf - readout/toggle/button/knob/stepper
+# widgets take cx/cy (center point), not x/y (top-left); frame/list take
+# x/y (top-left). Confirmed against force-shadow/src/force_shadow.c's real
+# parser, not just the preview tool. Doing this by hand for 16 pads is
+# exactly how the first draft got it wrong.
+#
+# v4 (2026-09-22): two pages instead of the earlier four-tab design (PADS
+# 1-8/9-16, GLOBAL, POOL ASSIGN), based on hand-drawn sketches - see
+# DESIGN.md's "v4" section for the full redesign history, what got tried
+# and rejected along the way, and the real render-caught bugs (list grid
+# overflow, a readout drawn on top of a frame's own title, a padded PLAY
+# button bleeding into the next pad's column) that shaped the final
+# coordinates below.
 
-HEADER = '''# ForceKitBuilder — shadow-GUI page (v1: core loop only — generate,
-# preview/lock, export). See DESIGN.md's "v2 scoping" section for the
-# original control-key table/rationale, and "v2 refinements" /
-# "Per-pad control redesign" for what changed since.
+HEADER = '''# ForceKitBuilder — shadow-GUI page (v4: two pages - PADS performance
+# grid + DETAIL single-pad view). See DESIGN.md's "v4" section for the
+# full redesign history.
 #
 # page=8, not 1-7: only seven SHIFT+SCENE-N combos physically exist, and
 # on the real device all seven were already taken (DX7, JV-880, Maze
@@ -16,44 +23,46 @@ HEADER = '''# ForceKitBuilder — shadow-GUI page (v1: core loop only — genera
 # slot 7). Kit Builder is exactly the "low-frequency tool" case
 # docs/adding-a-page.md's "Add-on launcher (tool add-ons)" section
 # describes - page 8+ isn't combo-bound, it's reached via the launcher
-# page (SHIFT+SCENE-7) instead. Confirmed live 2026-09-21: page=1
-# silently lost the slot to ForceDX7 (already there first).
+# page (SHIFT+SCENE-7) instead.
 #
 # Colour scheme: an approximation of the Akai Force's own OS look (dark
-# charcoal chassis, cyan selection/accent, neutral grey buttons) rather
-# than force-acid's td3 yellow/red - there's no captured reference screen-
-# shot or verified hex values for the real Force OS in this repo family
-# yet, so treat these exact values as a starting point to refine once
-# compared side-by-side with the real hardware, not as confirmed-correct.
-# Keeps style=td3's proven widget shapes (rounded frames, pill buttons)
-# and only overrides the theme_* colour values.
-#
-# Layout: four tabs - PADS 1-8, PADS 9-16, GLOBAL, POOL ASSIGN. Each of
-# the 16 pads carries its own LOCK/REROLL/CLEAR/PLAY controls directly
-# (no more shared "selected pad" side panel + a 4x4 tap-to-select grid) -
-# see DESIGN.md for why this needed splitting across two pad tabs: 16
-# pads x (frame + readout + toggle + 3 buttons) = 96 widgets, over the
-# format's 64-widgets-per-tab cap; 8 pads/tab x 6 widgets = 48, well
-# under it, and leaves room to grow. This also delivers "bigger pads" -
-# each pad now gets a full ~610x150 cell instead of a ~140px grid tile,
-# room for the complete sample name instead of a truncated one. POOL
-# ASSIGN is its own tab since 16 pads x 23 categories of individual
-# toggles is nowhere near fitting alongside anything else - see
-# DESIGN.md's "Pool assignment page" section for the full design.
+# charcoal chassis, orange selection/accent, neutral grey buttons) - no
+# verified reference screenshot or hex values for the real Force OS
+# exist in this repo family yet, treat these as a starting point to
+# refine once compared against real hardware. Keeps style=td3's proven
+# widget shapes (rounded frames, pill buttons), only the theme_* colour
+# values are overridden.
 #
 # IMPORTANT widget coordinate rule (confirmed against
 # force-shadow/src/force_shadow.c's real conf parser, not just the
 # preview tool): frame and list take x=/y= (top-left corner). Every
 # other widget kind - readout, toggle, button, knob, stepper, enum_h/v -
-# takes cx=/cy= (CENTER point). Mixing these up (an earlier draft of
-# this file used x=/y= on readout widgets) doesn't error, it just
-# silently draws at/near (0,0) - caught by rendering with
-# force-shadow/tools/render_conf_preview before deploying, not by
-# inspection.
+# takes cx=/cy= (CENTER point). Mixing these up doesn't error, it just
+# silently draws at/near (0,0) or on top of a frame's own title text -
+# caught by rendering with force-shadow/tools/render_conf_preview before
+# deploying, not by inspection, more than once while building this file.
+#
+# Also confirmed: frame widgets don't count against the real device's
+# 64-widget-per-tab cap (force_shadow.c: `if (strcmp(type, "frame") != 0
+# && n_page_widgets >= MAX_WIDGETS)`) - per-pad frames on the PADS page
+# are free. The preview tool's OWN line-storage buffer is separately
+# capped at 64 *lines* per tab including frames though (a tooling
+# limitation, not a real constraint) - PADS's 65 conf lines (16 frames +
+# 48 controls + 1 topbar readout) means the preview tool silently drops
+# pad 16's last line; the real device is unaffected (confirmed no
+# equivalent buffer in force_shadow.c's own line-by-line parser).
+#
+# Button widgets have a FIXED height in this format (48px, td3-style) -
+# width grows with label text (padding a label with spaces measurably
+# widens it - see PLAY on the DETAIL page below) but there is no w=/h=
+# override for buttons in the real conf parser, so a literal bigger
+# *square* button isn't achievable. A knob was considered as a tap-to-
+# play alternative and ruled out after reading force_shadow.c's touch
+# handler: W_KNOB only arms a drag on touch-down, nothing fires on a
+# plain tap.
 #
 # Generated by tools/gen_shadow_page.py (force-kit-builder repo) - edit
-# that script and regenerate rather than hand-editing the 16 near-
-# identical pad blocks below.
+# that script and regenerate rather than hand-editing this file.
 page=8
 ctrl_sock=/tmp/kitbuilder_ctrl.sock
 display_name="KIT BUILDER"
@@ -86,135 +95,15 @@ theme_go_off=616161
 theme_tabs=1a1a1a
 '''
 
-# Same hex as theme_accent below - button `color=` overrides a single
-# button's background (confirmed supported by both the preview tool and
-# the real force_shadow.c parser, not just one of them), used here so
-# PLAY stands out from the grey REROLL/CLEAR buttons without a second
-# theme. See force-shadow/docs/adding-a-page.md's button syntax.
-ACCENT_HEX = 'ff8f00'
+ACCENT_HEX = 'ff8f00'   # same hex as theme_accent - button color= override
 
-CELL_W, CELL_H = 610, 150
-COL_X = [20, 650]
-ROW_Y = [82, 244, 406, 568]
+TOPBAR_LASTPLAYED = 'readout cx=840 cy=36 w=780 h=48 label="" get=status'
 
-# Status readout lives in the top bar (cy=36, inside TOPBAR_H's 72px),
-# repeated on every tab - same pattern force-dx7/addon/shadow_page.conf
-# uses for its bank-name readout (cy=36 on every one of its tabs; each
-# tab redraws its own chrome, so a top-bar widget has to be repeated per
-# tab, not declared once globally). Positioned right of the "KIT BUILDER"
-# title (which ends well before x=420 at the title's scale=3) rather than
-# where an engine on/off pill would go - we have no engine_process_name
-# block, so on the real device (not just this preview tool, which always
-# draws its own placeholder pill) that whole area is free.
-TOPBAR_STATUS = 'readout cx=840 cy=36 w=780 h=48 label="" get=status'
-
-
-def pad_cell(pad_num, pad_index, x, y):
-    ro_cx = x + 14 + 582 // 2
-    ro_cy = y + 30 + 50 // 2
-    # Four controls now (was three) - LOCK/REROLL/CLEAR/PLAY split evenly
-    # across the cell's ~582px interior. Checked by rendering, not just
-    # computed - see gen_shadow_page.py's own history for why that matters
-    # (an earlier all-16-pads layout got button-pill overlap wrong by
-    # eyeballing the spacing instead).
-    lock_cx, reroll_cx, clear_cx, play_cx = x + 90, x + 230, x + 370, x + 510
-    ctrl_cy = y + 115
-    lines = [
-        f'frame   x={x}  y={y} w={CELL_W} h={CELL_H} title="PAD {pad_num}"',
-        f'readout cx={ro_cx} cy={ro_cy} w=582 h=50 label="" get=pad_info_{pad_index}',
-        f'toggle  cx={lock_cx} cy={ctrl_cy} label="LOCK" key=pad_lock_{pad_index}',
-        f'button  cx={reroll_cx} cy={ctrl_cy} label="REROLL" key=reroll_pad_{pad_index}',
-        f'button  cx={clear_cx} cy={ctrl_cy} label="CLEAR" key=clear_pad_{pad_index}',
-        f'button  cx={play_cx} cy={ctrl_cy} label="PLAY" key=play_pad_{pad_index} color={ACCENT_HEX}',
-    ]
-    return '\n'.join(lines)
-
-
-def pads_tab(name, start_pad_num):
-    out = [f'[tab {name}]', TOPBAR_STATUS, '']
-    for row in range(4):
-        for col in range(2):
-            pad_num = start_pad_num + row * 2 + col
-            pad_index = pad_num - 1
-            x, y = COL_X[col], ROW_Y[row]
-            out.append(pad_cell(pad_num, pad_index, x, y))
-            out.append('')
-    return '\n'.join(out).rstrip() + '\n'
-
-
-# ---- alternate layout: all 16 pads on one tab, no per-pad frame -----------
-# readout + toggle + 2 buttons, x16 = 64 widgets - exactly the format's
-# per-tab cap, zero widgets left over for a frame/title per pad (that's
-# what padInfoText()'s own pad-number prefix is for instead - see
-# daemon.mjs). GLOBAL actions still need their own separate tab; this
-# only consolidates the 16 pads themselves down from two tabs to one.
-ALL16_COLS = 4
-ALL16_ROWS = 4
-ALL16_CELL_W, ALL16_CELL_H = 295, 150
-ALL16_GAP_X, ALL16_GAP_Y = 14, 10
-ALL16_X0, ALL16_Y0 = 20, 85
-
-
-def pad_cell_noframe(pad_index, x, y):
-    ro_cx = x + ALL16_CELL_W // 2
-    ro_cy = y + 30
-    lock_cx = x + 50
-    reroll_cx = x + ALL16_CELL_W // 2
-    clear_cx = x + ALL16_CELL_W - 50
-    ctrl_cy = y + 100
-    lines = [
-        f'readout cx={ro_cx} cy={ro_cy} w=275 h=40 label="" get=pad_info_{pad_index}',
-        f'toggle  cx={lock_cx} cy={ctrl_cy} label="LOCK" key=pad_lock_{pad_index}',
-        f'button  cx={reroll_cx} cy={ctrl_cy} label="REROLL" key=reroll_pad_{pad_index}',
-        f'button  cx={clear_cx} cy={ctrl_cy} label="CLEAR" key=clear_pad_{pad_index}',
-    ]
-    return '\n'.join(lines)
-
-
-def pads_tab_all16():
-    # NOTE: adding TOPBAR_STATUS here pushes this tab to 65 widgets, one
-    # over the 64 cap (16 pads x 4 widgets already used the whole budget -
-    # see the module comment above). Left in for documentation/comparison
-    # purposes only (this layout was already explored and rejected, see
-    # DESIGN.md) - would need to drop one more widget to actually use it
-    # with a top-bar status readout too.
-    out = ['[tab PADS]', TOPBAR_STATUS, '']
-    for row in range(ALL16_ROWS):
-        for col in range(ALL16_COLS):
-            pad_index = row * ALL16_COLS + col
-            x = ALL16_X0 + col * (ALL16_CELL_W + ALL16_GAP_X)
-            y = ALL16_Y0 + row * (ALL16_CELL_H + ALL16_GAP_Y)
-            out.append(pad_cell_noframe(pad_index, x, y))
-            out.append('')
-    return '\n'.join(out).rstrip() + '\n'
-
-
-def global_tab():
-    # Status now lives in the top bar (TOPBAR_STATUS, repeated on every
-    # tab including this one) rather than a big box at the bottom of just
-    # this tab - frees this space up, so the four action buttons get more
-    # room to breathe instead of being packed into the top half only.
-    frame_x, frame_y, frame_w, frame_h = 200, 100, 880, 620
-    cx = frame_x + frame_w // 2
-    btn_ys = [220, 360, 500, 640]
-    lines = [
-        '[tab GLOBAL]',
-        TOPBAR_STATUS,
-        f'frame   x={frame_x} y={frame_y}  w={frame_w} h={frame_h} title="KIT ACTIONS"',
-        f'button  cx={cx} cy={btn_ys[0]} label="GENERATE ALL" key=generate',
-        f'button  cx={cx} cy={btn_ys[1]} label="CLEAR ALL" key=clear_all',
-        f'button  cx={cx} cy={btn_ys[2]} label="NORMALISE" key=normalize',
-        f'button  cx={cx} cy={btn_ys[3]} label="EXPORT KIT" key=export',
-    ]
-    return '\n'.join(lines) + '\n'
-
-
-# ---- POOL ASSIGN tab: which categories each pad draws from ---------------
 # core/sample_index.mjs's ROLE_ORDER, hardcoded here rather than read live -
 # this script has no Node runtime to import it with. Keep in sync by hand;
-# a mismatch wouldn't error, it would just make one category untoggleable
-# from the shadow page (same class of silent-drift risk shadow-gui.md
-# warns about for engine/web/shadow param triples generally).
+# a mismatch wouldn't error, it would just leave one category untoggleable
+# (same class of silent-drift risk shadow-gui.md warns about for engine/
+# web/shadow param triples generally).
 CATEGORIES = [
     ('kick', 'KICK'), ('snare', 'SNARE'), ('rim', 'RIM'), ('clap', 'CLAP'),
     ('hat', 'HAT'), ('closed_hat', 'CLOSED HAT'), ('open_hat', 'OPEN HAT'),
@@ -225,64 +114,122 @@ CATEGORIES = [
     ('other', 'OTHER'),
 ]
 
-POOL_FRAME1 = (20, 82, 1240, 260)     # SELECT PAD
-POOL_FRAME2 = (20, 360, 1240, 360)    # CATEGORIES
-POOL_CAT_COLS, POOL_CAT_ROWS = 6, 4
+# ---- PADS page: 16-pad 4x4 performance grid --------------------------------
+# 16 pads x 4 controls (LOCK/CLEAR/REROLL/PLAY) would be exactly 64 - zero
+# room left for the top-bar "last played" readout this page also needs.
+# CLEAR dropped here (kept on DETAIL) rather than the readout -
+# LOCK/REROLL/PLAY are the "in the moment" actions, CLEAR fits DETAIL's
+# editing role better. 16*3 + 1 = 49, comfortable headroom.
+PADS_ROW_Y = [82, 244, 406, 568]
+PADS_COL_X = [20, 335, 650, 965]
+PADS_CELL_W, PADS_CELL_H = 295, 150
 
 
-def pool_tab():
-    f1x, f1y, f1w, f1h = POOL_FRAME1
-    f2x, f2y, f2w, f2h = POOL_FRAME2
+def pads_cell(pad_num, pad_index, x, y):
+    # Frames are free (see HEADER's note) - a per-pad box is both the
+    # visual contrast asked for and a place to put the pad number, at
+    # zero extra widget cost. Left half = PLAY, right half = LOCK over
+    # REROLL, stacked. PLAY's label is NOT padded here (unlike DETAIL's
+    # wider bar) - a padded "   PLAY   " computes to 208px wide (checked
+    # via the renderer's real text_width() formula, not guessed), but
+    # this cell's left-half zone is only ~147px - it bled into the
+    # neighbouring pad's column in an earlier draft.
+    left_cx = x + PADS_CELL_W // 4
+    right_cx = x + (PADS_CELL_W * 3) // 4
+    mid_cy = y + 92
+    lock_cy = y + 68
+    reroll_cy = y + 118
+    return '\n'.join([
+        f'frame   x={x} y={y} w={PADS_CELL_W} h={PADS_CELL_H} title="{pad_num}"',
+        f'button  cx={left_cx} cy={mid_cy} label="PLAY" key=play_pad_{pad_index} color={ACCENT_HEX}',
+        f'toggle  cx={right_cx} cy={lock_cy} label="LOCK" key=pad_lock_{pad_index}',
+        f'button  cx={right_cx} cy={reroll_cy} label="REROLL" key=reroll_pad_{pad_index}',
+    ])
 
-    # frame_box() (both the preview tool and the real force_shadow.c) draws
-    # the frame's own title at y+14 and a divider rule at y+38 - anything
-    # placed above that divider collides with the title text. First draft
-    # put the readout/RESET row at y+32, squarely on top of "SELECT PAD" -
-    # caught by rendering (a stray "S" was all that showed), not by the
-    # numbers. Everything else here starts below y+38.
-    row1_cy = f1y + 55
-    list_cx0, list_cy0 = f1x + 16, f1y + 90
-    list_w, list_h = f1w - 32, f1h - 106
-    list_th = (list_h - 10) // 2   # 2 rows, gap=10
+
+def pads_grid_tab():
+    lines = ['[tab PADS]', TOPBAR_LASTPLAYED, '']
+    for row in range(4):
+        for col in range(4):
+            pad_index = row * 4 + col
+            x, y = PADS_COL_X[col], PADS_ROW_Y[row]
+            lines.append(pads_cell(pad_index + 1, pad_index, x, y))
+            lines.append('')
+    return '\n'.join(lines).rstrip() + '\n'
+
+
+# ---- DETAIL page ------------------------------------------------------------
+# Top-left: category toggle matrix. Top-right: global actions, vertical
+# stack. Bottom: full-width pad detail bar (wide readout so the sample
+# name truncates less than a narrow column would allow).
+CAT_FRAME = (20, 82, 900, 406)
+GLOBAL_COL = (940, 82, 300, 406)
+DETAIL_BAR = (20, 508, 1240, 220)
+CAT_COLS, CAT_ROWS = 6, 4
+
+
+def detail_tab():
+    cfx, cfy, cfw, cfh = CAT_FRAME
+    gx, gy, gw, gh = GLOBAL_COL
+    dbx, dby, dbw, dbh = DETAIL_BAR
+    gcx = gx + gw // 2
 
     lines = [
-        '[tab POOL ASSIGN]',
-        f'frame   x={f1x} y={f1y} w={f1w} h={f1h} title="SELECT PAD"',
-        f'readout cx={f1x + 220} cy={row1_cy} w=360 h=32 label="" get=pool_editing_label',
-        f'button  cx={f1x + f1w - 120} cy={row1_cy} label="RESET" key=pool_reset',
-        f'list    x={list_cx0} y={list_cy0} w={list_w} h={list_h} key=pool_pad_sel items=pool_pads sel=pool_pad_sel cols=8 rows=2 th={list_th} gap=10 jump=0 colmajor=0 numbered=1 scale=1.5',
-        f'frame   x={f2x} y={f2y} w={f2w} h={f2h} title="CATEGORIES - TAP TO TOGGLE"',
+        '[tab DETAIL]',
+        f'frame   x={cfx} y={cfy} w={cfw} h={cfh} title="CATEGORY - TAP TO TOGGLE"',
     ]
 
-    interior_x0, interior_x1 = f2x + 16, f2x + f2w - 16
-    interior_y0, interior_y1 = f2y + 40, f2y + f2h - 16
-    col_step = (interior_x1 - interior_x0) / POOL_CAT_COLS
-    row_step = (interior_y1 - interior_y0) / POOL_CAT_ROWS
-
+    interior_x0, interior_x1 = cfx + 16, cfx + cfw - 16
+    interior_y0, interior_y1 = cfy + 40, cfy + cfh - 16
+    col_step = (interior_x1 - interior_x0) / CAT_COLS
+    row_step = (interior_y1 - interior_y0) / CAT_ROWS
     for i, (cat, label) in enumerate(CATEGORIES):
-        col = i % POOL_CAT_COLS
-        row = i // POOL_CAT_COLS
+        col, row = i % CAT_COLS, i // CAT_COLS
         cx = int(interior_x0 + col_step * col + col_step / 2)
         cy = int(interior_y0 + row_step * row + row_step / 2)
-        lines.append(f'toggle  cx={cx} cy={cy} label="{label}" key=pool_cat_{cat}')
+        lines.append(f'toggle  cx={cx} cy={cy} label="{label}" key=detail_cat_{cat}')
+
+    # Vertical global-action stack, far right, above the detail bar.
+    lines += [
+        f'frame   x={gx} y={gy} w={gw} h={gh} title="KIT"',
+        f'button  cx={gcx} cy={gy + 80}  label="GENERATE ALL" key=generate',
+        f'button  cx={gcx} cy={gy + 180} label="CLEAR ALL" key=clear_all',
+        f'button  cx={gcx} cy={gy + 280} label="NORMALISE" key=normalize',
+        f'button  cx={gcx} cy={gy + 380} label="EXPORT KIT" key=export',
+    ]
+
+    # Full-width detail bar along the bottom. Gain knob sits directly
+    # under the pad stepper (not beside the readout) so the sample-name
+    # readout gets the freed width instead - long sample filenames were
+    # the thing most likely to truncate on this whole page. LOCK/CLEAR/
+    # REROLL share GAIN's horizontal centreline, per feedback on an
+    # earlier draft that had them lower.
+    nav_cx = dbx + 130
+    stepper_cy = dby + 55
+    knob_cy = dby + 145
+    row2_cy = knob_cy
+    lines += [
+        f'frame   x={dbx} y={dby} w={dbw} h={dbh} title="PAD DETAIL"',
+        f'stepper cx={nav_cx} cy={stepper_cy} w=220 h=44 label="" key=detail_pad_sel '
+        f'get=detail_pad_name idx=detail_pad_sel count=detail_pad_count min=0 max=15 numbered=1',
+        f'knob    cx={nav_cx} cy={knob_cy} r=35 label="GAIN" key=detail_gain min=0 max=2 pct=50',
+        f'readout cx={dbx + 640} cy={stepper_cy} w=700 h=44 label="" get=detail_sample_info',
+        # Width checked, not guessed: padded label = 208px wide, centered
+        # at dbx+1120 spans 1016-1224, clear of the bar's right edge at
+        # dbx+dbw=1260 (an earlier cx=dbx+1140 overflowed it by 4px).
+        f'button  cx={dbx + 1120} cy={stepper_cy} label="   PLAY   " key=detail_play color={ACCENT_HEX}',
+        f'toggle  cx={dbx + 350} cy={row2_cy} label="LOCK" key=detail_lock',
+        f'button  cx={dbx + 650} cy={row2_cy} label="CLEAR" key=detail_clear',
+        f'button  cx={dbx + 950} cy={row2_cy} label="REROLL" key=detail_reroll',
+    ]
 
     return '\n'.join(lines) + '\n'
 
 
 if __name__ == '__main__':
     import sys
-    args = sys.argv[1:]
-    one_page = '--one-page' in args
-    args = [a for a in args if a != '--one-page']
-    if one_page:
-        # Comparison layout - all 16 pads on one tab (no per-pad frame,
-        # exactly 64 widgets), GLOBAL still separate. Not the committed
-        # default; generate explicitly to compare against the 2-tab layout.
-        out = HEADER + '\n' + pads_tab_all16() + '\n' + global_tab() + '\n' + pool_tab()
-    else:
-        out = (HEADER + '\n' + pads_tab('PADS 1-8', 1) + '\n' + pads_tab('PADS 9-16', 9)
-               + '\n' + global_tab() + '\n' + pool_tab())
-    dest = args[0] if args else '/dev/stdout'
+    out = HEADER + '\n' + pads_grid_tab() + '\n' + detail_tab()
+    dest = sys.argv[1] if len(sys.argv) > 1 else '/dev/stdout'
     with open(dest, 'w') as f:
         f.write(out)
     print(f'wrote {dest}', file=sys.stderr)

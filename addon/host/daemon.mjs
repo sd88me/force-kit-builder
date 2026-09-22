@@ -23,30 +23,40 @@
  * the background from boot like a sequencer addon (see manage.sh), idle
  * until a SET/GET line arrives.
  *
- * Protocol keys are per-pad-indexed (pad_info_0..15, pad_lock_0..15,
- * reroll_pad_0..15, clear_pad_0..15, pad_path_0..15) rather than a shared
- * pad_sel + pad_info/pad_lock triple - each of the 16 pads has its own
- * LOCK/REROLL/CLEAR controls directly on the shadow page now (see
- * shadow_page.conf's header comment for why), so there's no single
- * "currently selected pad" concept left to track.
+ * v4: two pages instead of four tabs (PADS performance grid + DETAIL
+ * single-pad view) - see DESIGN.md's "v4" section for the full redesign
+ * history and the sketches it came from.
  *
- * SET play_pad_N is a relay, not a local action: shadow_page.conf only
- * has one ctrl_sock per page, so the PLAY button's SET arrives here like
- * everything else, and this process forwards "PLAY <N>" to
+ * PADS page: per-pad-indexed keys (pad_lock_0..15, reroll_pad_0..15,
+ * play_pad_0..15, pad_path_0..15) - each of the 16 pad boxes has its own
+ * LOCK/REROLL/PLAY directly, so there's no selection state to track for
+ * these. CLEAR isn't exposed here at all (16 pads x 4 controls hits the
+ * format's exact 64-widget cap with zero room for the top-bar "last
+ * played" readout - CLEAR lives on DETAIL only, see shadow_page.conf).
+ *
+ * DETAIL page: selection-based keys instead (detail_pad_sel/
+ * detail_pad_name/detail_pad_count/detail_sample_info/detail_gain/
+ * detail_lock/detail_clear/detail_reroll/detail_play/
+ * detail_cat_<category>) - the one place this daemon tracks a "currently
+ * selected" pad (state.detailSel), driven by a stepper widget (like
+ * DX7's own patch browser) rather than 16 pads' worth of individual
+ * category-toggle grids, which was never going to fit the widget budget.
+ * Category writes go straight through core/storage.mjs's existing
+ * savePadLayoutEntry() - the same function the web UI's SET_POOL action
+ * already uses, config-wide not per-kit (see that function's own doc
+ * comment).
+ *
+ * SET play_pad_N / detail_play are relays, not local actions:
+ * shadow_page.conf only has one ctrl_sock per page, so a PLAY tap arrives
+ * here like everything else, and this process forwards "PLAY <N>" to
  * addon/host/preview_host's own small listen socket (a separate,
  * Modules-Manager-gated process - see DESIGN.md's v3 section for why the
- * audio ring can't live in this always-on daemon). If preview_host isn't
- * running yet, this fails gracefully (ERR, not a crash) - it's an
- * optional companion process, not a hard dependency of the core daemon.
- *
- * pool_pad_sel/pool_pads/pool_editing_label/pool_cat_<category>/pool_reset
- * back the POOL ASSIGN tab - the one place this daemon does track a
- * "currently selected" pad (state.poolSel), since 23 categories x 16 pads
- * of individual toggles isn't remotely near the widget budget, so the
- * page picks one pad at a time via a list widget instead. Writes go
- * straight through core/storage.mjs's existing savePadLayoutEntry() - the
- * same function the web UI's SET_POOL action already uses, config-wide
- * not per-kit (see that function's own doc comment).
+ * audio ring can't live in this always-on daemon). On success, both also
+ * set state.status to the played sample's info - that's what "persists
+ * in the top bar as last played" (both pages share one TOPBAR readout
+ * bound to `status`). If preview_host isn't running yet, this fails
+ * gracefully (ERR, not a crash) - it's an optional companion process,
+ * not a hard dependency of the core daemon.
  */
 
 import fs from 'node:fs';
@@ -90,12 +100,10 @@ const state = {
     favourites: new Set(),
     lastExportDir: '',
     status: 'Ready.',
-    /* Which pad the POOL ASSIGN tab is currently editing - the one place
-     * in this daemon that genuinely needs a "currently selected" concept
-     * (the per-pad PADS tabs deliberately don't, see the note above), since
-     * a `list` widget's own selection state lives on force-shadow's side,
-     * not here - this just tracks the same index. */
-    poolSel: 0
+    /* Which pad the DETAIL page's stepper is currently on - see the
+     * module doc for why this is the one place this daemon tracks a
+     * "currently selected" pad. */
+    detailSel: 0
 };
 
 function reloadFromDisk() {
@@ -138,44 +146,40 @@ function shadowFontSafe(s) {
     return String(s).toUpperCase().replace(/[^A-Z0-9 .\-/>%+:]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function padInfoText(i) {
+/* Sample-name/category/lock text for a given pad index. Used both for a
+ * "last played" status line (padIndex, prefixed with "PAD N") and for
+ * DETAIL's own readout, whose stepper already shows the pad number, so
+ * that one variant omits the prefix. */
+function padSampleText(i, withPadPrefix) {
     const p = state.kit.pads[i];
     if (!p) return '';
-    /* Pad number prefixed unconditionally, not just when there's no frame
-     * title to show it otherwise - keeps this function layout-agnostic
-     * (the 16-pads-one-tab layout has no per-pad frame/title at all, see
-     * DESIGN.md). Redundant-but-harmless alongside a frame's own "PAD N"
-     * title in the two-tab layout. */
-    if (!p.sample) return shadowFontSafe(`${i + 1}: EMPTY - ${p.role}`);
+    const prefix = withPadPrefix ? `PAD ${i + 1}: ` : '';
+    if (!p.sample) return shadowFontSafe(`${prefix}EMPTY - ${p.role}`);
     const lock = p.locked ? ' - LOCKED' : '';
-    return shadowFontSafe(`${i + 1}: ${p.sample.filename} - ${p.sample.category}${lock}`);
+    return shadowFontSafe(`${prefix}${p.sample.filename} - ${p.sample.category}${lock}`);
 }
 
-/* ---- pool-assign helpers -------------------------------------------------
+/* ---- DETAIL page helpers --------------------------------------------------
  *
  * Pool assignment (which categories a pad draws from) is config-wide, not
- * per-kit - see core/storage.mjs's savePadLayoutEntry() doc. This tab edits
- * it directly through that same function the web UI's SET_POOL action
- * already uses; no new core logic, just a shadow-GUI front end for it. */
+ * per-kit - see core/storage.mjs's savePadLayoutEntry() doc. This page
+ * edits it directly through that same function the web UI's SET_POOL
+ * action already uses; no new core logic, just a shadow-GUI front end. */
 
-function poolPadsJson() {
-    return JSON.stringify(Array.from({ length: 16 }, (_, i) => ({ label: String(i + 1), name: '' })));
-}
-
-function poolEditingLabel() {
-    return shadowFontSafe(`EDITING PAD ${state.poolSel + 1}`);
+function detailPadName() {
+    return shadowFontSafe(`PAD ${state.detailSel + 1}`);
 }
 
 function currentPoolCategories() {
     const cfg = sampleIndex.loadConfig();
-    return kitModel.padPool(state.poolSel + 1, cfg);   // padPool takes a 1-indexed pad number
+    return kitModel.padPool(state.detailSel + 1, cfg);   // padPool takes a 1-indexed pad number
 }
 
 function setPoolCategories(categories) {
-    storage.savePadLayoutEntry(state.poolSel, categories);
+    storage.savePadLayoutEntry(state.detailSel, categories);
 }
 
-const CATEGORY_RE = /^pool_cat_(.+)$/;
+const CATEGORY_RE = /^detail_cat_(.+)$/;
 
 /* ---- SET/GET handlers ---------------------------------------------------
  *
@@ -185,7 +189,7 @@ const CATEGORY_RE = /^pool_cat_(.+)$/;
  * header comment) replaced that with per-pad-indexed keys instead: no
  * selection state to track, each widget just names its own pad index. */
 
-const PAD_KEY_RE = /^(pad_info|pad_lock|pad_path|reroll_pad|clear_pad)_(\d+)$/;
+const PAD_KEY_RE = /^(pad_lock|pad_path|reroll_pad)_(\d+)$/;
 
 function doGet(key) {
     const m = key.match(PAD_KEY_RE);
@@ -195,16 +199,26 @@ function doGet(key) {
         const i = parseInt(m[2], 10);
         if (i < 0 || i > 15) return '';
         const p = state.kit.pads[i];
-        if (kind === 'pad_info') return padInfoText(i);
         if (kind === 'pad_lock') return p && p.locked ? '1' : '0';
         if (kind === 'pad_path') return (p && p.sample && p.sample.filesystem_path) || '';
         return '';
     }
     if (key === 'status') return shadowFontSafe(state.status);
 
-    if (key === 'pool_pads') return poolPadsJson();
-    if (key === 'pool_pad_sel') return String(state.poolSel);
-    if (key === 'pool_editing_label') return poolEditingLabel();
+    if (key === 'detail_pad_sel') return String(state.detailSel);
+    if (key === 'detail_pad_name') return detailPadName();
+    if (key === 'detail_pad_count') return '16';
+    if (key === 'detail_sample_info') { syncKit(); return padSampleText(state.detailSel, false); }
+    if (key === 'detail_gain') {
+        syncKit();
+        const p = state.kit.pads[state.detailSel];
+        return String((p && p.playback && p.playback.gain != null) ? p.playback.gain : 1.0);
+    }
+    if (key === 'detail_lock') {
+        syncKit();
+        const p = state.kit.pads[state.detailSel];
+        return p && p.locked ? '1' : '0';
+    }
     const catMatch = key.match(CATEGORY_RE);
     if (catMatch) {
         return currentPoolCategories().includes(catMatch[1]) ? '1' : '0';
@@ -251,33 +265,43 @@ function doSet(key, value) {
             return { ok: true, msg: '' };
         }
         if (kind === 'reroll_pad') return rerollOnePad(i);
-        if (kind === 'clear_pad') {
-            const r = kitModel.clearPad(state.kit, i);
-            if (r === 'cleared') persistKit();
-            state.status = `Pad ${i + 1}: ${r}.`;
-            return { ok: true, msg: state.status };
-        }
         return { ok: false, msg: 'read-only key: ' + key };
     }
 
-    if (key === 'pool_pad_sel') {
+    if (key === 'detail_pad_sel') {
         const i = parseInt(value, 10);
         if (!Number.isInteger(i) || i < 0 || i > 15) return { ok: false, msg: 'bad pad index' };
-        state.poolSel = i;
+        state.detailSel = i;
         return { ok: true, msg: '' };
     }
+    if (key === 'detail_gain') {
+        syncKit();
+        const g = kitModel.setPadGain(state.kit, state.detailSel, parseFloat(value));
+        persistKit();
+        state.status = `Pad ${state.detailSel + 1} gain: ${g.toFixed(2)}`;
+        return { ok: true, msg: '' };
+    }
+    if (key === 'detail_lock') {
+        syncKit();
+        kitModel.toggleLock(state.kit, state.detailSel);
+        persistKit();
+        return { ok: true, msg: '' };
+    }
+    if (key === 'detail_clear') {
+        syncKit();
+        const r = kitModel.clearPad(state.kit, state.detailSel);
+        if (r === 'cleared') persistKit();
+        state.status = `Pad ${state.detailSel + 1}: ${r}.`;
+        return { ok: true, msg: state.status };
+    }
+    if (key === 'detail_reroll') { syncKit(); return rerollOnePad(state.detailSel); }
     const catMatch = key.match(CATEGORY_RE);
     if (catMatch) {
         const cat = catMatch[1];
         const current = currentPoolCategories();
         const next = current.includes(cat) ? current.filter((c) => c !== cat) : current.concat([cat]);
         setPoolCategories(next);
-        state.status = `Pad ${state.poolSel + 1} pool: ${next.join(', ') || 'other'}`;
-        return { ok: true, msg: state.status };
-    }
-    if (key === 'pool_reset') {
-        setPoolCategories(kitModel.DEFAULT_PAD_LAYOUT[state.poolSel]);
-        state.status = `Pad ${state.poolSel + 1} pool reset to default.`;
+        state.status = `Pad ${state.detailSel + 1} pool: ${next.join(', ') || 'other'}`;
         return { ok: true, msg: state.status };
     }
 
@@ -389,6 +413,21 @@ function relayPlayPad(padIndex, cb) {
     });
 }
 
+/* Plays a pad and, on success, sets state.status to that pad's sample
+ * info - this is the entire mechanism behind "last played persists in
+ * the top bar": both PADS' per-pad play_pad_N and DETAIL's selection-
+ * based detail_play funnel through here, and the TOPBAR readout on both
+ * pages already polls `status`. */
+function playPadAndAnnounce(padIndex, cb) {
+    relayPlayPad(padIndex, (r) => {
+        if (r.ok) {
+            syncKit();
+            state.status = padSampleText(padIndex, true);
+        }
+        cb(r);
+    });
+}
+
 function handleLine(sock, line) {
     const sp = line.indexOf(' ');
     const cmd = sp === -1 ? line : line.slice(0, sp);
@@ -404,8 +443,9 @@ function handleLine(sock, line) {
         const value = sp2 === -1 ? '' : rest.slice(sp2 + 1);
 
         const playMatch = key.match(PLAY_PAD_RE);
-        if (playMatch) {
-            relayPlayPad(parseInt(playMatch[1], 10), (r) => {
+        if (playMatch || key === 'detail_play') {
+            const padIndex = playMatch ? parseInt(playMatch[1], 10) : state.detailSel;
+            playPadAndAnnounce(padIndex, (r) => {
                 sock.write((r.ok ? 'OK ' : 'ERR ') + (r.msg || '') + '\n');
             });
             return;
