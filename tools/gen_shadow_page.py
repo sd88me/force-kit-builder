@@ -87,6 +87,17 @@ CELL_W, CELL_H = 610, 150
 COL_X = [20, 650]
 ROW_Y = [82, 244, 406, 568]
 
+# Status readout lives in the top bar (cy=36, inside TOPBAR_H's 72px),
+# repeated on every tab - same pattern force-dx7/addon/shadow_page.conf
+# uses for its bank-name readout (cy=36 on every one of its tabs; each
+# tab redraws its own chrome, so a top-bar widget has to be repeated per
+# tab, not declared once globally). Positioned right of the "KIT BUILDER"
+# title (which ends well before x=420 at the title's scale=3) rather than
+# where an engine on/off pill would go - we have no engine_process_name
+# block, so on the real device (not just this preview tool, which always
+# draws its own placeholder pill) that whole area is free.
+TOPBAR_STATUS = 'readout cx=840 cy=36 w=780 h=48 label="" get=status'
+
 
 def pad_cell(pad_num, pad_index, x, y):
     ro_cx = x + 14 + 582 // 2
@@ -104,7 +115,7 @@ def pad_cell(pad_num, pad_index, x, y):
 
 
 def pads_tab(name, start_pad_num):
-    out = [f'[tab {name}]']
+    out = [f'[tab {name}]', TOPBAR_STATUS, '']
     for row in range(4):
         for col in range(2):
             pad_num = start_pad_num + row * 2 + col
@@ -145,7 +156,13 @@ def pad_cell_noframe(pad_index, x, y):
 
 
 def pads_tab_all16():
-    out = ['[tab PADS]']
+    # NOTE: adding TOPBAR_STATUS here pushes this tab to 65 widgets, one
+    # over the 64 cap (16 pads x 4 widgets already used the whole budget -
+    # see the module comment above). Left in for documentation/comparison
+    # purposes only (this layout was already explored and rejected, see
+    # DESIGN.md) - would need to drop one more widget to actually use it
+    # with a top-bar status readout too.
+    out = ['[tab PADS]', TOPBAR_STATUS, '']
     for row in range(ALL16_ROWS):
         for col in range(ALL16_COLS):
             pad_index = row * ALL16_COLS + col
@@ -157,20 +174,22 @@ def pads_tab_all16():
 
 
 def global_tab():
-    frame_x, frame_y, frame_w, frame_h = 200, 82, 880, 440
+    # Status now lives in the top bar (TOPBAR_STATUS, repeated on every
+    # tab including this one) rather than a big box at the bottom of just
+    # this tab - frees this space up, so the four action buttons get more
+    # room to breathe instead of being packed into the top half only.
+    frame_x, frame_y, frame_w, frame_h = 200, 100, 880, 620
     cx = frame_x + frame_w // 2
-    btn_ys = [180, 280, 380, 480]
+    btn_ys = [220, 360, 500, 640]
     lines = [
         '[tab GLOBAL]',
+        TOPBAR_STATUS,
         f'frame   x={frame_x} y={frame_y}  w={frame_w} h={frame_h} title="KIT ACTIONS"',
         f'button  cx={cx} cy={btn_ys[0]} label="GENERATE ALL" key=generate',
         f'button  cx={cx} cy={btn_ys[1]} label="CLEAR ALL" key=clear_all',
         f'button  cx={cx} cy={btn_ys[2]} label="NORMALISE" key=normalize',
         f'button  cx={cx} cy={btn_ys[3]} label="EXPORT KIT" key=export',
     ]
-    ro_x, ro_y, ro_w, ro_h = 250, 560, 780, 150
-    ro_cx, ro_cy = ro_x + ro_w // 2, ro_y + ro_h // 2
-    lines.append(f'readout cx={ro_cx} cy={ro_cy} w={ro_w} h={ro_h} label="" get=status')
     return '\n'.join(lines) + '\n'
 
 

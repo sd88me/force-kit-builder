@@ -843,6 +843,46 @@ render is what settled this, not a guess — worth being able to
 regenerate and re-check if the per-pad control count ever shrinks enough
 to make it viable again.
 
+### Status readout moved to the top bar (2026-09-22, same day)
+
+Was a large box at the bottom of just the GLOBAL tab; moved to the top
+bar (`cy=36`, inside `TOPBAR_H`'s 72px) instead, repeated on every tab -
+same pattern `force-dx7/addon/shadow_page.conf` already uses for its
+bank-name readout. Two real findings behind this, not just taste:
+
+- We have no `engine_process_name` block, so on the *real* device (not
+  the preview tool, which always draws its own placeholder pill
+  regardless of the `.conf`) the whole top-right of the bar is empty -
+  free real estate, not a space we'd be fighting the renderer for.
+- Putting status only on GLOBAL meant switching tabs to see it. On the
+  top bar it's visible from any pad tab too - e.g. "Pad 3 reassigned"
+  shows immediately without leaving the pads you're working on.
+
+Freed the bottom of GLOBAL up for the four action buttons to use the
+full tab height instead of being packed into the top half.
+
+### Pools, categories, buckets — asked to clarify, already distinct
+
+`core/sample_index.mjs`'s `ROLE_ORDER` (23 raw classification
+categories: `kick`, `snare`, `hat`, `crash`, `vox`, `synth`, …) is not
+the same thing as `SYSTEM_BUCKETS` (8: Kick/Snr/Clap/Hats/Tom/Perc/Cym/
+FX) — buckets are a **display-only** grouping for the web UI's sample-
+count summary panel, not currently wired to pool assignment at all. A
+pad's actual **pool** (`pad_layout` config entry, written by the web
+UI's `SET_POOL` action / `core/storage.mjs`'s `savePadLayoutEntry()`) is
+an array of 1+ raw *categories*, config-wide (not per-kit) — see
+`DEFAULT_PAD_LAYOUT` in `core/kit_model.mjs` for the 16 defaults.
+
+Asked whether pool selectors could fit on the shadow page: not cleanly.
+23 categories is well over `enum_h`/`enum_v`'s 6-option cap, there's no
+multi-select widget in the format at all (a pool is a *set* of
+categories, not one pick), and repurposing the 8 display buckets for
+this would still be 2 over the cap and would change what "pool" means
+(restricting each pad to one bucket rather than a free category
+combination) — a real product decision, not made here. Left as web-UI-
+only, per the original "Why alongside, not instead" reasoning above; not
+revisited further without a decision on that tradeoff.
+
 ### Verified before deploying
 
 - All three tabs rendered with `force-shadow/tools/render_conf_preview`
