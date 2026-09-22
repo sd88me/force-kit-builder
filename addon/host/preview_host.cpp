@@ -1,27 +1,38 @@
 /*
  * Force Kit Builder — audible pad preview producer (v3, see DESIGN.md's
- * "v3 scoping: audible sample preview via note keys" for the full design
- * and why this is a separate native process from daemon.mjs).
+ * "v3 scoping" / "v3 revision: touchscreen trigger, not MIDI" for the full
+ * design and why this is a separate native process from daemon.mjs).
  *
- * Flow: RtMidiIn virtual port receives a note-on (36-51, matching
- * core/kit_model.mjs's PAD_MIDI_NOTES) from whichever Force track the user
- * routes to it (the standard MPC MIDI-out-to-external-instrument workflow,
- * same as Maze Voice/DX7 - not a passive tap of raw physical pad hits) ->
- * asks the already-running daemon.mjs over its own control socket which
- * WAV is on that pad (GET pad_path_<note-36>, a plain filesystem path, not
- * run through daemon.mjs's shadowFontSafe() display sanitizer) -> decodes
- * the WAV from scratch (no library, matching this project's core/wav_info.mjs
- * convention) -> resamples to 44100 if needed -> pushes into
- * /forceAudioInject<mix-slot>, the same shared-memory ring
+ * Flow: shadow_page.conf's per-pad PLAY button sends its SET through
+ * daemon.mjs's existing control socket (shadow_page.conf only has one
+ * ctrl_sock per page); daemon.mjs relays "PLAY <padIndex>" to *this*
+ * process's own tiny listen socket (see run_play_server() below) rather
+ * than owning the shared-memory ring itself (daemon.mjs is boot-launched
+ * and always running - if it held the ring directly, every acvs restart
+ * would happen while a voice was attached, exactly the state
+ * force-audioin's own hard rule forbids). On PLAY, this process asks
+ * daemon.mjs which WAV is on that pad (GET pad_path_<n>, a plain
+ * filesystem path, not run through daemon.mjs's shadowFontSafe() display
+ * sanitizer) -> decodes the WAV from scratch (no library, matching this
+ * project's core/wav_info.mjs convention) -> resamples to 44100 if needed
+ * -> pushes into /forceAudioInject<mix-slot>, the same shared-memory ring
  * Maze Voice/DX7/JV-880 already inject audio through.
+ *
+ * No MIDI at all — an earlier draft of this used a virtual RtMidiIn port
+ * (the family's standard pattern for Maze Voice/DX7/etc.), but that means
+ * a real separate ALSA MIDI destination the user has to route a track's
+ * output to before anything works. Asked directly, not assumed: a
+ * touchscreen PLAY button avoids that setup step entirely, at the cost of
+ * only being triggerable from the shadow page itself (not from physically
+ * playing a routed track's pads) - an accepted tradeoff, not an oversight.
  *
  * v1 is deliberately not monophonic/cutoff-on-retrigger: ring_push() only
  * ever appends at the ring's head (same as every other producer in this
  * family - see dx7_host.cpp's own ring_push()), it does not reset head/tail
- * on a new note. Concurrently issuing a reset while the consumer thread
+ * on a new trigger. Concurrently issuing a reset while the consumer thread
  * inside MPC is mid-read would be a real race, not a simplification worth
- * making. In practice this means overlapping hits layer/queue rather than
- * one cutting the other off - reasonable drum-kit behaviour for short
+ * making. In practice this means rapid re-taps layer/queue rather than one
+ * cutting the other off - reasonable drum-kit behaviour for short
  * one-shots, revisit only if it turns out not to be in real use.
  */
 
@@ -37,15 +48,16 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
 
-#include "rtmidi/RtMidi.h"
 #include "forceAudioInject.h"
 
 /* ---- config (parsed from argv, see NSMODULE.json's ARGUMENTS) ------------ */
 
 static std::string g_ctrl_sock = "/tmp/kitbuilder_ctrl.sock";
+static std::string g_listen_sock = "/tmp/kitbuilder_preview_ctrl.sock";
 static unsigned g_mix_slot = 3;
 
 /* ---- shared-memory ring (producer side) — mirrors dx7_host.cpp's
@@ -261,32 +273,72 @@ static std::vector<float> resample_to_44100(const std::vector<float> &src, uint3
     return out;
 }
 
-/* ---- MIDI ---------------------------------------------------------------- */
+/* ---- play one pad: shared by the real listen server and --test-full ----- */
 
-static void on_midi_cb(double /*dt*/, std::vector<unsigned char> *msg, void * /*ud*/) {
-    if (!msg || msg->size() < 3) return;
-    uint8_t status = (*msg)[0];
-    uint8_t type = status & 0xF0;
-    uint8_t note = (*msg)[1];
-    uint8_t vel = (*msg)[2];
-    if (type != 0x90 || vel == 0) return;      /* ignore note-off, and 0x90 vel=0 (note-off alias) */
-    if (note < 36 || note > 51) return;        /* outside PAD_MIDI_NOTES */
-    int padIndex = note - 36;
+struct PlayResult { bool ok; std::string msg; };
+
+static PlayResult play_pad(int padIndex) {
+    if (padIndex < 0 || padIndex > 15) return { false, "bad pad index" };
 
     std::string path = ctrl_get_pad_path(padIndex);
-    if (path.empty()) return;                   /* empty pad, or daemon unreachable - silent, not an error */
+    if (path.empty()) return { false, "empty pad" };
 
     WavDecoded w;
-    if (!decode_wav_file(path, w)) {
-        fprintf(stderr, "[kb-preview] failed to decode: %s\n", path.c_str());
-        return;
-    }
+    if (!decode_wav_file(path, w)) return { false, "decode failed" };
+
     std::vector<float> resampled = resample_to_44100(w.interleaved_stereo, w.frames, w.rate);
     uint32_t outFrames = (uint32_t)(resampled.size() / 2);
     if (outFrames > AI_RING_FRAMES - 1) outFrames = AI_RING_FRAMES - 1;   /* v1: truncate a very long sample */
 
     ring_push(resampled.data(), outFrames);
     fprintf(stderr, "[kb-preview] pad %d -> %s (%u frames)\n", padIndex + 1, path.c_str(), outFrames);
+    return { true, "" };
+}
+
+/* ---- listen socket: daemon.mjs relays "PLAY <padIndex>\n" here from the
+ * shadow page's PLAY button (see shadow_page.conf / daemon.mjs's play_pad_N
+ * handler). Same plain-text style as every other control socket in this
+ * family, just a different (smaller) verb set - this isn't the shadow-GUI
+ * ctrl_sock protocol itself, daemon.mjs still owns that. ------------------- */
+
+static void run_play_server() {
+    unlink(g_listen_sock.c_str());
+    int srv = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (srv < 0) { perror("socket"); return; }
+
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, g_listen_sock.c_str(), sizeof(addr.sun_path) - 1);
+
+    if (bind(srv, (struct sockaddr *)&addr, sizeof(addr)) != 0) { perror("bind"); close(srv); return; }
+    chmod(g_listen_sock.c_str(), 0777);
+    if (listen(srv, 8) != 0) { perror("listen"); close(srv); return; }
+
+    fprintf(stderr, "[kb-preview] ready - ring slot %u, listening on %s\n", g_mix_slot, g_listen_sock.c_str());
+
+    while (true) {
+        int cfd = accept(srv, nullptr, nullptr);
+        if (cfd < 0) continue;
+
+        char buf[256] = { 0 };
+        ssize_t n = read(cfd, buf, sizeof(buf) - 1);
+        if (n > 0) {
+            std::string line(buf, (size_t)n);
+            while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+
+            if (line.rfind("PLAY ", 0) == 0) {
+                int padIndex = atoi(line.c_str() + 5);
+                PlayResult r = play_pad(padIndex);
+                std::string reply = (r.ok ? "OK\n" : ("ERR " + r.msg + "\n"));
+                write(cfd, reply.c_str(), reply.size());
+            } else {
+                const char *err = "ERR unknown command\n";
+                write(cfd, err, strlen(err));
+            }
+        }
+        close(cfd);
+    }
 }
 
 /* ---- offline self-test: --test-decode <wav-path> --------------------
@@ -323,29 +375,26 @@ int main(int argc, char **argv) {
         return path.empty() ? 1 : 0;
     }
     if (argc >= 5 && !strcmp(argv[1], "--test-full")) {
-        /* Full pipeline minus the actual MIDI event: ctrl lookup -> decode
-         * -> resample -> real shm ring write. Exercises exactly what
-         * on_midi_cb() does, just called directly instead of from RtMidi's
-         * callback - see the module doc for why real MIDI I/O isn't
+        /* Full pipeline minus the actual "tap the PLAY button" trigger:
+         * ctrl lookup -> decode -> resample -> real shm ring write.
+         * Exercises exactly what play_pad() does, just called directly
+         * instead of from the listen socket - see the module doc for why
+         * the real socket round trip from a live shadow page isn't
          * testable in this build environment. */
         g_ctrl_sock = argv[2];
         g_mix_slot = (unsigned)atoi(argv[3]);
         int padIndex = atoi(argv[4]);
         if (!shm_setup()) { printf("SHM_SETUP_FAILED\n"); return 1; }
-        std::string path = ctrl_get_pad_path(padIndex);
-        if (path.empty()) { printf("EMPTY_PAD\n"); return 1; }
-        WavDecoded w;
-        if (!decode_wav_file(path, w)) { printf("DECODE_FAILED\n"); return 1; }
-        std::vector<float> resampled = resample_to_44100(w.interleaved_stereo, w.frames, w.rate);
-        uint32_t outFrames = (uint32_t)(resampled.size() / 2);
-        ring_push(resampled.data(), outFrames);
-        printf("pad_path=%s frames=%u ring_head=%u ring_frames_written=%llu\n",
-               path.c_str(), outFrames, g_shm->head, (unsigned long long)g_shm->frames_written);
+        PlayResult r = play_pad(padIndex);
+        if (!r.ok) { printf("PLAY_FAILED: %s\n", r.msg.c_str()); return 1; }
+        printf("ring_head=%u ring_frames_written=%llu\n",
+               g_shm->head, (unsigned long long)g_shm->frames_written);
         return 0;
     }
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--ctrl-sock") && i + 1 < argc) g_ctrl_sock = argv[++i];
+        else if (!strcmp(argv[i], "--listen-sock") && i + 1 < argc) g_listen_sock = argv[++i];
         else if (!strcmp(argv[i], "--mix-slot") && i + 1 < argc) g_mix_slot = (unsigned)atoi(argv[++i]);
     }
 
@@ -354,18 +403,6 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    RtMidiIn *midiIn = nullptr;
-    try {
-        midiIn = new RtMidiIn(RtMidi::UNSPECIFIED, "KitBuilderPreview", 256);
-        midiIn->openVirtualPort("KIT BUILDER PREVIEW");
-        midiIn->ignoreTypes(true, true, true);   /* sysex/timing/active-sense all irrelevant here */
-        midiIn->setCallback(&on_midi_cb, nullptr);
-    } catch (RtMidiError &e) {
-        fprintf(stderr, "[kb-preview] MIDI setup failed: %s\n", e.getMessage().c_str());
-        return 1;
-    }
-
-    fprintf(stderr, "[kb-preview] ready - ring slot %u, ctrl-sock %s\n", g_mix_slot, g_ctrl_sock.c_str());
-    while (true) std::this_thread::sleep_for(std::chrono::seconds(3600));
+    run_play_server();   /* blocks forever, accepting PLAY <n> connections */
     return 0;
 }

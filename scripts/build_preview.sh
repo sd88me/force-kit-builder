@@ -27,17 +27,13 @@ fi
 cd "$REPO_ROOT"
 mkdir -p build
 
-echo "Compiling RtMidi..."
-g++ -O2 -c -fPIC -std=c++14 -D__LINUX_ALSA__ addon/host/rtmidi/RtMidi.cpp -o build/RtMidi.o -Iaddon/host/rtmidi
-
 echo "Compiling preview_host..."
 g++ -O2 -fPIC -std=c++14 \
     -mcpu=cortex-a17 -mfpu=neon-vfpv4 -mfloat-abi=hard \
     addon/host/preview_host.cpp \
-    build/RtMidi.o \
     -o build/preview_host \
-    -Iaddon/host -Iaddon/host/rtmidi \
-    -lasound -lpthread -lrt
+    -Iaddon/host \
+    -lpthread -lrt
 
 echo ""
 echo "=== Build complete: build/preview_host ==="

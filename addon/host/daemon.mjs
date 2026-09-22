@@ -29,6 +29,15 @@
  * LOCK/REROLL/CLEAR controls directly on the shadow page now (see
  * shadow_page.conf's header comment for why), so there's no single
  * "currently selected pad" concept left to track.
+ *
+ * SET play_pad_N is a relay, not a local action: shadow_page.conf only
+ * has one ctrl_sock per page, so the PLAY button's SET arrives here like
+ * everything else, and this process forwards "PLAY <N>" to
+ * addon/host/preview_host's own small listen socket (a separate,
+ * Modules-Manager-gated process - see DESIGN.md's v3 section for why the
+ * audio ring can't live in this always-on daemon). If preview_host isn't
+ * running yet, this fails gracefully (ERR, not a crash) - it's an
+ * optional companion process, not a hard dependency of the core daemon.
  */
 
 import fs from 'node:fs';
@@ -37,6 +46,7 @@ import net from 'node:net';
 import { pathToFileURL } from 'node:url';
 
 const SOCK_PATH = '/tmp/kitbuilder_ctrl.sock';
+const PREVIEW_SOCK_PATH = '/tmp/kitbuilder_preview_ctrl.sock';
 
 function resolveNodeServerAppDir() {
     // Same convention every addon uses to find its install root - see
@@ -274,6 +284,40 @@ const server = net.createServer((sock) => {
     sock.on('error', () => {});
 });
 
+const PLAY_PAD_RE = /^play_pad_(\d+)$/;
+
+/* Relays "PLAY <padIndex>" to preview_host's own listen socket and calls
+ * back with the same {ok,msg} shape doSet() uses. A short-lived connection
+ * per tap, same reasoning as preview_host's own ctrl_get_pad_path() - tap
+ * rate is nowhere near hot enough for connection setup to matter. Fails
+ * gracefully (ok:false) rather than throwing if preview_host isn't running
+ * (ECONNREFUSED) or hangs (safety timeout) - a PLAY tap should never be
+ * able to wedge the daemon's own socket loop. */
+function relayPlayPad(padIndex, cb) {
+    let done = false;
+    const finish = (r) => { if (!done) { done = true; cb(r); } };
+
+    const conn = net.createConnection(PREVIEW_SOCK_PATH);
+    let buf = '';
+    const timer = setTimeout(() => {
+        try { conn.destroy(); } catch (e) { /* already closed */ }
+        finish({ ok: false, msg: 'preview timed out' });
+    }, 2000);
+
+    conn.on('connect', () => conn.write(`PLAY ${padIndex}\n`));
+    conn.on('data', (d) => { buf += d.toString('utf8'); });
+    conn.on('end', () => {
+        clearTimeout(timer);
+        const line = buf.trim();
+        if (line.startsWith('OK')) finish({ ok: true, msg: '' });
+        else finish({ ok: false, msg: line.replace(/^ERR\s*/, '') || 'preview failed' });
+    });
+    conn.on('error', (e) => {
+        clearTimeout(timer);
+        finish({ ok: false, msg: 'preview not running (' + e.code + ')' });
+    });
+}
+
 function handleLine(sock, line) {
     const sp = line.indexOf(' ');
     const cmd = sp === -1 ? line : line.slice(0, sp);
@@ -285,10 +329,19 @@ function handleLine(sock, line) {
     }
     if (cmd === 'SET') {
         const sp2 = rest.indexOf(' ');
-        const key = sp2 === -1 ? rest : rest.slice(0, sp2);
+        const key = (sp2 === -1 ? rest : rest.slice(0, sp2)).trim();
         const value = sp2 === -1 ? '' : rest.slice(sp2 + 1);
+
+        const playMatch = key.match(PLAY_PAD_RE);
+        if (playMatch) {
+            relayPlayPad(parseInt(playMatch[1], 10), (r) => {
+                sock.write((r.ok ? 'OK ' : 'ERR ') + (r.msg || '') + '\n');
+            });
+            return;
+        }
+
         try {
-            const r = doSet(key.trim(), value);
+            const r = doSet(key, value);
             sock.write((r.ok ? 'OK ' : 'ERR ') + (r.msg || '') + '\n');
         } catch (e) {
             sock.write('ERR ' + e.message + '\n');

@@ -102,7 +102,12 @@ TOPBAR_STATUS = 'readout cx=840 cy=36 w=780 h=48 label="" get=status'
 def pad_cell(pad_num, pad_index, x, y):
     ro_cx = x + 14 + 582 // 2
     ro_cy = y + 30 + 50 // 2
-    lock_cx, reroll_cx, clear_cx = x + 110, x + 305, x + 500
+    # Four controls now (was three) - LOCK/REROLL/CLEAR/PLAY split evenly
+    # across the cell's ~582px interior. Checked by rendering, not just
+    # computed - see gen_shadow_page.py's own history for why that matters
+    # (an earlier all-16-pads layout got button-pill overlap wrong by
+    # eyeballing the spacing instead).
+    lock_cx, reroll_cx, clear_cx, play_cx = x + 90, x + 230, x + 370, x + 510
     ctrl_cy = y + 115
     lines = [
         f'frame   x={x}  y={y} w={CELL_W} h={CELL_H} title="PAD {pad_num}"',
@@ -110,6 +115,7 @@ def pad_cell(pad_num, pad_index, x, y):
         f'toggle  cx={lock_cx} cy={ctrl_cy} label="LOCK" key=pad_lock_{pad_index}',
         f'button  cx={reroll_cx} cy={ctrl_cy} label="REROLL" key=reroll_pad_{pad_index}',
         f'button  cx={clear_cx} cy={ctrl_cy} label="CLEAR" key=clear_pad_{pad_index}',
+        f'button  cx={play_cx} cy={ctrl_cy} label="PLAY" key=play_pad_{pad_index}',
     ]
     return '\n'.join(lines)
 

@@ -1,8 +1,10 @@
 # Build environment for force-kit-builder's addon/host/preview_host (v3
-# audible pad preview, see DESIGN.md) — copied from force-dx7/scripts/
-# Dockerfile verbatim, same toolchain requirements (RtMidi + libasound),
-# not independently maintained. Akai Force is ARM 32-bit hard-float
-# (ELF 32-bit LSB, ARM EABI5, /lib/ld-linux-armhf.so.3, "GNU/Linux 3.2.0").
+# audible pad preview, see DESIGN.md) — base copied from force-dx7/scripts/
+# Dockerfile. preview_host has no MIDI (touchscreen-triggered, not RtMidi -
+# see DESIGN.md's "v3 revision"), so libasound2-dev isn't actually needed
+# here, unlike force-dx7's own copy of this file; left out. Akai Force is
+# ARM 32-bit hard-float (ELF 32-bit LSB, ARM EABI5,
+# /lib/ld-linux-armhf.so.3, "GNU/Linux 3.2.0").
 #
 # Native armhf build *under QEMU* (docker run --platform linux/arm/v7 needs
 # binfmt_misc for arm registered on the host - Docker Desktop ships this; on
@@ -25,7 +27,6 @@ FROM debian:bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         g++ \
-        libasound2-dev \
         file \
     && rm -rf /var/lib/apt/lists/*
 

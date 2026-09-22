@@ -1072,13 +1072,6 @@ project introduces, just worth stating plainly rather than implying
 
 ### Not tested — genuinely can't be, without the real device
 
-- **RtMidi virtual port creation and real note-on reception.** No ALSA
-  sequencer subsystem in this Docker/QEMU build environment to open a
-  real virtual MIDI port against. `on_midi_cb()` itself is simple enough
-  (note range filter, velocity-0 note-off alias check, dispatch to the
-  already-tested decode/ring-push path) that the real risk was always in
-  the parts that *are* tested now, but this is still an honest gap, not
-  a formality — first real test has to be on hardware.
 - **Ring slot 3 is still not live-confirmed.** Same caveat as when this
   was first scoped — no SSH access to the device while this was built.
   `ls /dev/shm/forceAudioInject*` and cross-checking every installed
@@ -1089,7 +1082,81 @@ project introduces, just worth stating plainly rather than implying
   "Real UX dependency, not a shortcut around it" above) — that's a
   device/project-state check, not something any of this offline testing
   could exercise.
-- No `shadow_page.conf` changes were made for this (no "PREVIEWING"
-  indicator or similar) — v1 has no visual state tied to preview at all,
-  intentionally out of scope for this pass; revisit only if it turns out
-  to be needed once tried live.
+
+## v3 revision: touchscreen PLAY button, not MIDI (2026-09-22, same day)
+
+Asked directly: does the RtMidi virtual port need track routing set up
+every time, or does it passively see whatever's already playing? Answer
+was routing, always — `RtMidiIn::openVirtualPort()` registers a real,
+separate ALSA sequencer client that shows up in MPC's own Track MIDI
+In/Out dropdown; it can't see anything not explicitly routed to it, same
+as Maze Voice/DX7/every other voice addon in this family. Explicitly
+asked not to have that setup requirement.
+
+Checked whether a passive tap of physical pad hits exists as a lower-risk
+alternative before proposing anything: it doesn't, within this family's
+established techniques. `sequencer-midi.md` confirms every voice-style
+addon here (Maze Voice, DX7, Harpie4T, RiffMaker4T, Euclidier) uses the
+same routed-virtual-port pattern; the "Private" MIDI port only carries
+pad *LED colour* commands, one-directional, not note data. The only way
+to actually intercept MPC's internal pad-note dispatch without a routed
+track would be reverse-engineering and `LD_PRELOAD`-hooking MPC's
+internal event handling — the same risk class as `mockbaMagic`'s raw
+in-memory patching, `gotchas.md`'s own top-risk category. Not undertaken
+for a preview *convenience* feature without that tradeoff being made
+explicitly, not assumed.
+
+**Resolution, proposed and chosen instead: a PLAY button per pad on the
+shadow page itself.** This isn't a workaround, it's a real simplification
+— removes the MIDI layer from this project entirely, not just the routing
+step:
+
+- `preview_host.cpp`: `RtMidiIn`, the vendored `rtmidi/` sources, and
+  `on_midi_cb()` are gone. Replaced by `run_play_server()`, a small Unix-
+  socket server (`--listen-sock`, default `/tmp/kitbuilder_preview_ctrl.sock`)
+  speaking `PLAY <padIndex>\n` → `OK\n`/`ERR <msg>\n`. `play_pad()` is the
+  exact same ctrl-lookup → decode → resample → ring-push logic
+  `on_midi_cb()` used to call, just invoked from the socket handler
+  instead of a MIDI callback — the part that was actually tested before
+  (WAV decode, the full pipeline) is unchanged.
+- **Build got simpler, not just different**: no RtMidi to compile/vendor,
+  no `-lasound`, no ALSA dependency in `scripts/Dockerfile` at all anymore.
+- `daemon.mjs`: new `SET play_pad_N` — since `shadow_page.conf` only has
+  one `ctrl_sock` per page (pointed at `daemon.mjs`, unchanged), the PLAY
+  button's tap arrives at the *daemon*, which relays `PLAY <n>` to
+  `preview_host`'s listen socket and forwards the reply. `daemon.mjs`
+  still never touches the shared-memory ring directly — it stays the
+  always-on, boot-launched, audio-free process it already was; only
+  `preview_host` (Modules-Manager-gated, never boot-launched) holds the
+  ring, so `force-audioin`'s hard rule (never restart `acvs` with a voice
+  attached) still can't be violated by a daemon that's always running.
+  Fails gracefully (`ERR preview not running (ENOENT)`, not a crash) if
+  `preview_host` hasn't been started from the Modules page yet.
+- `shadow_page.conf`: fourth control per pad — LOCK/REROLL/CLEAR/PLAY,
+  evenly spaced across the cell (checked by rendering, not just computed
+  — see `gen_shadow_page.py`'s own comment on why that math gets checked
+  every time now). 6 widgets/pad × 8 = 48/tab, still comfortably under
+  the 64 cap.
+
+**Verified**: the entire relay chain, for real, bridging three
+processes across two container architectures — `daemon.mjs` (x86), the
+real armhf `preview_host` binary (Docker/QEMU), and a tiny throwaway C
+test client (since neither build environment had `nc`/`socat`/`python3`
+available to improvise with). Confirmed: `SET play_pad_0` with no
+`preview_host` running replies `ERR preview not running (ENOENT)`
+(graceful, not a hang or crash); with `preview_host` running and a real
+kit generated, `SET play_pad_0` on the daemon's socket produces a real
+`preview_host` log line (`pad 1 -> /mm/Samples/kick_3.wav (4000 frames)`)
+and a real ring write; an out-of-range pad (`play_pad_99`) is rejected by
+`preview_host`'s own bounds check and the `ERR bad pad index` relays back
+through the daemon correctly; a pad `generate` had already filled (no
+longer-empty pads to test against, since `generate` fills every unlocked
+pad) confirmed the `OK` path too. Full `tests/run.js` suite (104 cases,
+unaffected by any of this) still passes.
+
+**Still not tested**: the actual tap-to-PLAY round trip from a live
+`force_shadow.c` render on real hardware — everything up to and including
+the daemon relay is verified, but a real touchscreen tap dispatching that
+`SET` is the one link this environment can't exercise. Ring slot 3 and
+Audio-In track routing remain the same open items as before this
+revision — unrelated to what changed here.
