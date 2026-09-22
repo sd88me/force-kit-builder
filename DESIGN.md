@@ -1390,3 +1390,122 @@ amount of offline testing can exercise — pad 16's REROLL actually
 rendering on real hardware (confirmed not a real constraint, but still
 worth eyeballing) and whether GAIN's knob-drag gesture feels right on an
 actual touchscreen.
+
+## v4.1: real-device bugs no offline render caught (2026-09-23)
+
+v4 was deployed and tested live for the first time. Real hardware
+surfaced four bugs the offline preview tool either couldn't catch or
+actively hid — this pass is what happens once "not yet deployed" from
+every prior section actually gets tested for real.
+
+### Bug 1: only 6 of 16 pads had a box outline
+
+Real, hard cap in `force_shadow.c`, separate from the 64-widget
+`MAX_WIDGETS` cap already known about: `#define MAX_FRAMES 6`, enforced
+per-tab (`if (n_page_frames >= MAX_FRAMES) return;`, silent, no error).
+v4's single 16-pad PADS page had 16 `frame` lines; only the first 6 were
+ever stored. The earlier "frames don't count against the widget cap, so
+they're free" finding was true but incomplete — it has its *own*, much
+smaller budget.
+
+The preview tool's line-buffer limit (documented in v4's section above)
+happened to *also* cause visible problems around 16 frames, which
+masked the real cause — that limit is 64 *lines*, not 6 *frames*, a
+completely different number that doesn't warn about this bug at all
+(PADS's old 65-line count was barely over that limit, nowhere near
+suggestive of a 6-frame cap). Checked by grepping `force_shadow.c`
+directly rather than continuing to guess from render output.
+
+**Fix**: split PADS into three pages of up to 6 pads each (PADS 1-6 /
+7-12 / 13-16), each safely under `MAX_FRAMES`. Bonus: with only 6 pads
+per page, `MAX_WIDGETS` (64) stops being the binding constraint (6×4+1=25,
+nowhere close) — **CLEAR is back** on every pad, restoring the fourth
+control v4 had dropped purely for widget-budget reasons.
+
+### Bug 2: the preview tool's font-width formula is wrong by ~50%
+
+`render_conf_preview.c`'s `text_width()` approximates
+`strlen(s)*(GLYPH_CELL+1)*scale - scale` (~15px/char at scale 1.5). The
+real `force_shadow.c` uses a **baked hinted-font constant**,
+`text_width_land(s,1.5) = strlen(s) * FONT_HI_1_5_W`, where
+`FONT_HI_1_5_W` (`src/font_hi.h`) is exactly **10**, not ~15. Every width
+calculation in v4's own comments ("checked, not guessed") was
+internally consistent with the *preview tool's* formula, which is a
+genuinely different, less accurate number than what the real renderer
+uses — "checked" had been checked against the wrong reference the whole
+time.
+
+This is why DETAIL's KIT action buttons overflowed their column on real
+hardware despite v4's math appearing to show comfortable clearance:
+that math used the preview tool's ~50%-too-generous width, so a button
+that looked safely narrow in the offline render was narrower in reality
+than assumed, but the SPACING between buttons (computed the same
+inflated way) was also tighter than intended relative to real button
+size — net effect, real buttons sat closer to each other and the
+column's edge than the (wrong) preview implied.
+
+**Fix**: added `text_width_1_5()`/`button_width()` to
+`tools/gen_shadow_page.py` using the *real* formula, and `assert`
+statements (not just comments) checking every button's computed bounds
+against its containing frame at generation time — a future coordinate
+change that breaks this now fails loudly (`AssertionError`) instead of
+shipping a silent overflow to the real device again.
+
+### Bug 3: DETAIL's pad-selector row overlapped its own frame's title
+
+`render_frame_box`'s td3 branch (confirmed identical in both the preview
+tool and `force_shadow.c`) draws the frame's title at `y+14` and a
+divider rule at `y+38`. v4's `stepper_cy = dby + 55` with a 44px-tall
+stepper put its top edge at `55 - 22 = 33`, **above** the divider at 38 —
+overlapping the "PAD DETAIL" title text by 5px. The preview tool's own
+renders never made this obvious enough to catch (a preview-tool title
+weight/anti-aliasing difference, most likely) — this was only visible on
+the real screen.
+
+**Fix**: `FRAME_TITLE_DIVIDER_Y = 38` and `FRAME_CONTENT_TOP_MARGIN = 12`
+are now named constants every content row's top edge is computed
+against, plus an `assert` (`stepper row overlaps frame title`) checking
+it holds.
+
+### Bug 4: GAIN's value text overflowed the PAD DETAIL box
+
+`force_shadow.c`'s `W_KNOB` td3 draw path: label text at
+`cy + radius + 12`, value text at `cy + radius + 29`, each with its own
+glyph height on top (~13px at scale 1.5). v4's `knob_cy = dby + 145` in a
+`dbh=220` bar put the value text's bottom edge at roughly
+`145 + 35 + 29 + 13 = 222`, **2px past** the frame's own bottom edge at
+`dby + 220`. A 2px miss, but a real one, and the kind of margin error
+that's invisible in hand arithmetic without writing out every term.
+
+**Fix**: `knob_text_bottom_offset` computed explicitly from the same
+`radius + 42` (label + value + glyph-height terms) the real renderer
+uses, with the bar's own height and knob position solved backward from
+it (`knob_cy = dby + dbh - knob_text_bottom_offset - 12`) rather than
+picked by feel, plus an `assert` (`GAIN value text overflows PAD DETAIL
+frame`) checking it.
+
+### Also fixed while rebuilding: pad titles
+
+Per direct request: `frame ... title="{pad_num}"` changed to
+`title="PAD {pad_num}"` — cosmetic, no real-constraint story behind it,
+just hadn't been done yet.
+
+### Verified
+
+All four fixes checked two ways: `gen_shadow_page.py`'s own `assert`
+statements (KIT button bounds, stepper/divider clearance, GAIN text
+bounds) pass at generation time, and the regenerated four-tab page
+renders cleanly via `render_conf_preview` with all 6-per-page pad boxes
+visible, "PAD N" titles, and both DETAIL spacing fixes visually
+confirmed. `clear_pad_N`'s return to the protocol re-tested end-to-end
+against a real `daemon.mjs` (locked-pad refusal still works correctly).
+Full `tests/run.js` suite (104 cases) still passes.
+
+**Deployed and live-verified** (2026-09-23) — device's DHCP address had
+changed from `.187` to `.44` since the v4 deploy; found via the second
+IP the `force-device-workflow` skill already knew about. Backend
+protocol tested against real device data post-deploy (`detail_pad_name`,
+`detail_sample_info`, etc. all correct); `acvs` restart confirmed via
+`force_shadow.log`: `"KIT BUILDER" ... 2 tab(s)` for the v4 deploy, this
+revision's device-side re-verification (4 tabs, all pad boxes, spacing
+fixes) is the natural next check once back on the device.
