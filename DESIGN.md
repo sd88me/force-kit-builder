@@ -1029,22 +1029,67 @@ per-project setup Maze Voice/DX7 users already do. Not a new burden this
 project introduces, just worth stating plainly rather than implying
 "hit a pad, hear it" is fully automatic with zero project-side setup.
 
-### Open items before implementation
+### Built (2026-09-22) — everything except real MIDI hardware I/O
 
-- [ ] Live-confirm ring slot 3 is actually free (see above).
-- [ ] Decide the producer's binary/addon name and folder shape
-      (`addon/host/preview_host.cpp`? a fully separate
-      `AddOns/ForceKitBuilderPreview/`? — lean toward keeping it inside
-      `ForceKitBuilder/` alongside `daemon.mjs`, matching how DX7 keeps
-      `dx7_host` and its web/shadow surfaces in one addon folder, but not
-      decided).
-- [ ] `NSMODULE.json` `--ctrl-sock`/`--mix-slot`-style `ARGUMENTS`, once
-      the slot is confirmed.
-- [ ] WAV decode coverage: confirm the real sample library's formats
-      (bit depth, mono/stereo mix) are fully covered by a straight port of
-      `wav_info.mjs`'s parsing logic — it already handles the odd-chunk/
-      truncated/no-data-chunk edge cases `tests/test_wav_info.js` covers;
-      re-verify those same edge cases still hold once ported to C++.
-- [ ] Render the eventual `shadow_page.conf` addition (if the preview
-      gets its own visual state, e.g. a "PREVIEWING" indicator) with
-      `render_conf_preview` before deploying, same discipline as v2.
+- [x] **Folder shape**: `addon/host/preview_host.cpp`, alongside
+      `daemon.mjs`, matching how DX7 keeps `dx7_host` and its other
+      surfaces in one addon folder — decided rather than left open.
+      `addon/host/rtmidi/` (vendored `RtMidi.h`/`.cpp`, copied from
+      `force-dx7/src/rtmidi/`) and `addon/host/forceAudioInject.h`
+      (vendored from `force-audioin`, byte-for-byte — noted in its own
+      header that `force-dx7`'s vendored copy has since drifted out of
+      date against the canonical, not this repo's problem to fix).
+- [x] **`NSMODULE.json`**: written, `--ctrl-sock`/`--mix-slot` arguments,
+      `AUTOLAUNCHABLE: false` per `force-audioin`'s hard rule.
+- [x] **Build**: `scripts/Dockerfile` + `scripts/build_preview.sh`, exact
+      recipe copied from `force-dx7/scripts/` (Debian bookworm, not the
+      older `stretch` base — this Force's real ceiling is glibc 2.39 per
+      that Dockerfile's own comment). Compiles clean to a real armhf
+      binary (`ELF 32-bit LSB pie executable, ARM, EABI5`), zero warnings.
+- [x] **WAV decode coverage**: from-scratch RIFF/WAVE parser (no existing
+      precedent to port — `dx7_host.cpp`/`maze_host.cpp` are pure
+      synthesis, neither reads sample files), verified via a
+      `--test-decode <path>` self-test mode against synthetic fixtures
+      covering every format claimed: 8/16/24/32-bit PCM, 32-bit float,
+      mono and stereo, plus a 22050Hz file to check the resampler. All
+      produced correct frame counts and plausible sample values (checked
+      by hand against the known sine-wave fixture, not just "didn't
+      crash"). Edge cases mirroring `tests/test_wav_info.js`'s coverage —
+      truncated file, garbage/non-RIFF input, no `data` chunk — all fail
+      cleanly (`DECODE_FAILED`, exit 1), no crash.
+- [x] **Full pipeline, minus the actual MIDI event**: a `--test-full`
+      self-test mode calls exactly what `on_midi_cb()` calls (ctrl-socket
+      lookup → decode → resample → real ring write) directly. Bridged a
+      real `daemon.mjs` (x86 Docker, the same offline-fixture harness v1/
+      v2 used) with the real armhf `preview_host` binary (Docker + QEMU)
+      over a shared bind-mounted `/tmp` so they could talk over the real
+      Unix socket across two different container architectures — confirmed
+      `GET pad_path_0` returns empty on an unassigned pad, then a real
+      path after `SET generate`, then confirmed the full pipeline writes
+      to a genuine `/forceAudioInject3` shared-memory segment (524344
+      bytes — exactly `sizeof(ai_shm_t)` for `AI_RING_FRAMES=65536`
+      frames × `AI_MAX_CH=2`, not a guessed number).
+
+### Not tested — genuinely can't be, without the real device
+
+- **RtMidi virtual port creation and real note-on reception.** No ALSA
+  sequencer subsystem in this Docker/QEMU build environment to open a
+  real virtual MIDI port against. `on_midi_cb()` itself is simple enough
+  (note range filter, velocity-0 note-off alias check, dispatch to the
+  already-tested decode/ring-push path) that the real risk was always in
+  the parts that *are* tested now, but this is still an honest gap, not
+  a formality — first real test has to be on hardware.
+- **Ring slot 3 is still not live-confirmed.** Same caveat as when this
+  was first scoped — no SSH access to the device while this was built.
+  `ls /dev/shm/forceAudioInject*` and cross-checking every installed
+  voice addon's `NSMODULE.json` `--mix-slot` before trusting slot 3
+  remains the first real step on-device, before even installing this.
+- **Whether the injected audio is actually audible** depends on the
+  current Force project having an Audio-In track routed to it (see
+  "Real UX dependency, not a shortcut around it" above) — that's a
+  device/project-state check, not something any of this offline testing
+  could exercise.
+- No `shadow_page.conf` changes were made for this (no "PREVIEWING"
+  indicator or similar) — v1 has no visual state tied to preview at all,
+  intentionally out of scope for this pass; revisit only if it turns out
+  to be needed once tried live.
