@@ -22,6 +22,13 @@
  * no Modules Manager entry, no NSMODULE.json - this process just runs in
  * the background from boot like a sequencer addon (see manage.sh), idle
  * until a SET/GET line arrives.
+ *
+ * Protocol keys are per-pad-indexed (pad_info_0..15, pad_lock_0..15,
+ * reroll_pad_0..15, clear_pad_0..15, pad_path_0..15) rather than a shared
+ * pad_sel + pad_info/pad_lock triple - each of the 16 pads has its own
+ * LOCK/REROLL/CLEAR controls directly on the shadow page now (see
+ * shadow_page.conf's header comment for why), so there's no single
+ * "currently selected pad" concept left to track.
  */
 
 import fs from 'node:fs';
@@ -46,6 +53,8 @@ const kitModel = await import(u('core/kit_model.mjs'));
 const sampleIndex = await import(u('core/sample_index.mjs'));
 const randomAssign = await import(u('core/random_assign.mjs'));
 const storage = await import(u('core/storage.mjs'));
+const loudness = await import(u('core/loudness.mjs'));
+const wavRms = await import(u('core/wav_rms.mjs'));
 
 /* Same data dir the nodeServer plugin points at - see plugin's index.js
  * ensureCore(), CORE_DIR is identical here since both resolve relative to
@@ -61,7 +70,6 @@ const state = {
     rejects: new Set(),
     favourites: new Set(),
     lastExportDir: '',
-    padSel: 0,
     status: 'Ready.'
 };
 
@@ -105,57 +113,90 @@ function shadowFontSafe(s) {
     return String(s).toUpperCase().replace(/[^A-Z0-9 .\-/>%+:]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function padLabel(p) {
-    if (!p || !p.sample) return 'EMPTY';
-    return shadowFontSafe(p.sample.filename) || 'EMPTY';
-}
-
-function padsJson() {
-    return JSON.stringify(state.kit.pads.map((p) => ({
-        label: padLabel(p),
-        name: shadowFontSafe(p.role || '')
-    })));
-}
-
-function padInfoText() {
-    const p = state.kit.pads[state.padSel];
+function padInfoText(i) {
+    const p = state.kit.pads[i];
     if (!p) return '';
-    if (!p.sample) return shadowFontSafe(`PAD ${state.padSel + 1}: EMPTY - ${p.role}`);
+    if (!p.sample) return shadowFontSafe(`EMPTY - ${p.role}`);
     const lock = p.locked ? ' - LOCKED' : '';
-    return shadowFontSafe(`PAD ${state.padSel + 1}: ${p.sample.filename} - ${p.sample.category}${lock}`);
+    return shadowFontSafe(`${p.sample.filename} - ${p.sample.category}${lock}`);
 }
 
-/* ---- SET/GET handlers --------------------------------------------------- */
+/* ---- SET/GET handlers ---------------------------------------------------
+ *
+ * v1's protocol had one shared pad_sel/pad_info/pad_lock triple driving a
+ * tap-to-select list widget. The per-pad-widget redesign (each of the 16
+ * pads carries its own LOCK/REROLL/CLEAR directly - see shadow_page.conf's
+ * header comment) replaced that with per-pad-indexed keys instead: no
+ * selection state to track, each widget just names its own pad index. */
+
+const PAD_KEY_RE = /^(pad_info|pad_lock|pad_path|reroll_pad|clear_pad)_(\d+)$/;
 
 function doGet(key) {
-    if (key === 'pads' || key === 'pad_info' || key === 'pad_lock') syncKit();
-    switch (key) {
-        case 'pads': return padsJson();
-        case 'pad_sel': return String(state.padSel);
-        case 'pad_info': return padInfoText();
-        case 'pad_lock': {
-            const p = state.kit.pads[state.padSel];
-            return p && p.locked ? '1' : '0';
-        }
-        case 'status': return shadowFontSafe(state.status);
-        default: return '';
+    const m = key.match(PAD_KEY_RE);
+    if (m) {
+        syncKit();
+        const kind = m[1];
+        const i = parseInt(m[2], 10);
+        if (i < 0 || i > 15) return '';
+        const p = state.kit.pads[i];
+        if (kind === 'pad_info') return padInfoText(i);
+        if (kind === 'pad_lock') return p && p.locked ? '1' : '0';
+        if (kind === 'pad_path') return (p && p.sample && p.sample.filesystem_path) || '';
+        return '';
     }
+    if (key === 'status') return shadowFontSafe(state.status);
+    return '';
+}
+
+function rerollOnePad(i) {
+    if (!state.index) { state.status = 'No sample index yet - rescan from the web UI first.'; return { ok: false, msg: state.status }; }
+    const cfg = sampleIndex.loadConfig();
+    const r = randomAssign.rerollPad({
+        kit: state.kit, index: state.index, config: cfg,
+        source: 'all', preventDuplicates: true,
+        padIndex: i, rejects: state.rejects, favourites: state.favourites
+    });
+    if (r.changed) {
+        state.kit.pads[i] = r.pad;
+        state.kit.modified_at = new Date().toISOString();
+        persistKit();
+        state.status = `Pad ${i + 1} reassigned.`;
+    } else {
+        /* changed:false with no warning means core/random_assign.mjs's
+         * reroll landed back on the exact sample the pad already had (a
+         * real, expected outcome with a small candidate pool, confirmed
+         * live in offline testing - not a locked-pad case, which has its
+         * own explicit 'pad is locked' warning text already). Reply OK,
+         * not ERR either way - none of these are a real failure. */
+        state.status = r.warning || `Pad ${i + 1} unchanged - same sample re-picked.`;
+    }
+    return { ok: true, msg: state.status };
 }
 
 function doSet(key, value) {
-    if (key !== 'pad_sel') syncKit();
-    switch (key) {
-        case 'pad_sel': {
-            const i = parseInt(value, 10);
-            if (!Number.isInteger(i) || i < 0 || i > 15) return { ok: false, msg: 'bad pad index' };
-            state.padSel = i;
-            return { ok: true, msg: '' };
-        }
-        case 'pad_lock': {
-            kitModel.toggleLock(state.kit, state.padSel);
+    const m = key.match(PAD_KEY_RE);
+    if (m) {
+        syncKit();
+        const kind = m[1];
+        const i = parseInt(m[2], 10);
+        if (i < 0 || i > 15) return { ok: false, msg: 'bad pad index' };
+        if (kind === 'pad_lock') {
+            kitModel.toggleLock(state.kit, i);
             persistKit();
             return { ok: true, msg: '' };
         }
+        if (kind === 'reroll_pad') return rerollOnePad(i);
+        if (kind === 'clear_pad') {
+            const r = kitModel.clearPad(state.kit, i);
+            if (r === 'cleared') persistKit();
+            state.status = `Pad ${i + 1}: ${r}.`;
+            return { ok: true, msg: state.status };
+        }
+        return { ok: false, msg: 'read-only key: ' + key };
+    }
+
+    syncKit();
+    switch (key) {
         case 'generate': {
             if (!state.index) { state.status = 'No sample index yet - rescan from the web UI first.'; return { ok: false, msg: state.status }; }
             const cfg = sampleIndex.loadConfig();
@@ -171,27 +212,24 @@ function doSet(key, value) {
             state.status = r.warning ? `Generated with warning: ${r.warning}` : 'Generated a new kit.';
             return { ok: true, msg: state.status };
         }
-        case 'reassign_pad': {
-            if (!state.index) { state.status = 'No sample index yet - rescan from the web UI first.'; return { ok: false, msg: state.status }; }
-            const cfg = sampleIndex.loadConfig();
-            const r = randomAssign.rerollPad({
-                kit: state.kit, index: state.index, config: cfg,
-                source: 'all', preventDuplicates: true,
-                padIndex: state.padSel, rejects: state.rejects, favourites: state.favourites
+        case 'clear_all': {
+            const n = kitModel.clearUnlocked(state.kit);
+            if (n) persistKit();
+            state.status = `Cleared ${n} pad(s).`;
+            return { ok: true, msg: state.status };
+        }
+        case 'normalize': {
+            const loudnesses = state.kit.pads.map((p) => {
+                if (!p.sample || !p.sample.filesystem_path) return 0;
+                try {
+                    const bytes = fs.readFileSync(p.sample.filesystem_path);
+                    return wavRms.wavRms(bytes) || 0;
+                } catch (e) { return 0; }
             });
-            if (r.changed) {
-                state.kit.pads[state.padSel] = r.pad;
-                state.kit.modified_at = new Date().toISOString();
-                persistKit();
-                state.status = 'Pad reassigned.';
-            } else {
-                /* Locked pad, or nothing left to assign - core/random_assign.mjs
-                 * returns {changed:false, warning} rather than throwing (see
-                 * DESIGN.md's v2 scoping "open items"). Reply OK, not ERR - this
-                 * is an expected outcome the shadow page shows via status, not a
-                 * real failure. */
-                state.status = r.warning || 'Pad unchanged (locked?).';
-            }
+            const gains = loudness.matchGains(loudnesses);
+            for (let i = 0; i < 16; i++) kitModel.setPadGain(state.kit, i, gains[i]);
+            persistKit();
+            state.status = 'Levels normalised.';
             return { ok: true, msg: state.status };
         }
         case 'export': {
