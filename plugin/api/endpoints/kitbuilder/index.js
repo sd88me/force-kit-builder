@@ -151,7 +151,7 @@ async function STATE() {
     endJSON({
         ok: true,
         kit: state.kit,
-        config: { sample_roots: cfg.sample_roots, scan_filters: cfg.scan_filters, pad_layout: cfg.pad_layout },
+        config: { sample_roots: cfg.sample_roots, scan_filters: cfg.scan_filters, pad_layout: cfg.pad_layout, pad_colors: cfg.pad_colors },
         categories: c.sampleIndex.ROLE_ORDER,
         index: {
             present: !!state.index,
@@ -273,6 +273,17 @@ async function SET_POOL() {
         const layout = c.storage.savePadLayoutEntry(i, categories);
         if (!layout) return errorJSON('write failed', 500);
         endJSON({ ok: true, pad_layout: layout });
+    });
+}
+
+async function SET_PAD_COLORS() {
+    const c = await ensureCore();
+    await withBody(async (body) => {
+        const colors = (body.colors && typeof body.colors === 'object') ? body.colors : null;
+        if (!colors) return errorJSON('colors required');
+        const merged = c.storage.savePadColors(colors);
+        if (!merged) return errorJSON('write failed', 500);
+        endJSON({ ok: true, pad_colors: merged });
     });
 }
 
@@ -487,6 +498,7 @@ function INIT($req, $res) {
         case 'REROLL': REROLL().catch(fail); break;
         case 'SET_PAD': SET_PAD().catch(fail); break;
         case 'SET_POOL': SET_POOL().catch(fail); break;
+        case 'SET_PAD_COLORS': SET_PAD_COLORS().catch(fail); break;
         case 'CLEAR_ALL': CLEAR_ALL().catch(fail); break;
         case 'UNLOCK_ALL': UNLOCK_ALL().catch(fail); break;
         case 'NEW_KIT': NEW_KIT().catch(fail); break;

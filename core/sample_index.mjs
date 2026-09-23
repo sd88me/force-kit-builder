@@ -23,6 +23,7 @@ import path from 'node:path';
 import { buildAliasIndex, classify } from './sample_classifier.mjs';
 import { makeScanFilter } from './scan_filters.mjs';
 import { DEFAULT_PAD_LAYOUT } from './kit_model.mjs';
+import { DEFAULT_PAD_COLORS, mergePadColors } from './pad_colors.mjs';
 
 /* Writable Kit Builder data area. Defaults to ./data next to this module;
  * the plugin's index.js overrides this once at startup via
@@ -83,7 +84,12 @@ export const DEFAULT_CONFIG = {
     },
     /* Which categories each pad draws from — a union pool, uniform pick.
      * `["other"]` = every category with no dedicated pad slot, plus `fx`. */
-    pad_layout: DEFAULT_PAD_LAYOUT.map((e) => e.slice())
+    pad_layout: DEFAULT_PAD_LAYOUT.map((e) => e.slice()),
+    /* Category -> hex colour (no '#'), editable via the web GUI. Drives the
+     * pad-grid tile colouring here, and will drive the XPM pad colour /
+     * shadow-GUI frame colouring once those pieces are built (see
+     * core/pad_colors.mjs's doc). */
+    pad_colors: Object.assign({}, DEFAULT_PAD_COLORS)
 };
 
 /* Every classification category, in a stable order (drives emptyCounts). */
@@ -129,13 +135,16 @@ function mergeConfig(base, over) {
         if (Array.isArray(over.pad_layout) && over.pad_layout.length === 16) {
             out.pad_layout = over.pad_layout.map((e) => (Array.isArray(e) ? e.slice() : ['other']));
         }
+        if (over.pad_colors && typeof over.pad_colors === 'object') {
+            out.pad_colors = mergePadColors(over.pad_colors);
+        }
         if (over.role_rules && typeof over.role_rules === 'object') {
             for (const role of Object.keys(over.role_rules)) {
                 out.role_rules[role] = Object.assign({}, out.role_rules[role], over.role_rules[role]);
             }
         }
         for (const k of Object.keys(over)) {
-            if (['sample_roots', 'supported_extensions', 'scan_filters', 'pad_layout', 'role_rules'].indexOf(k) === -1) out[k] = over[k];
+            if (['sample_roots', 'supported_extensions', 'scan_filters', 'pad_layout', 'pad_colors', 'role_rules'].indexOf(k) === -1) out[k] = over[k];
         }
     }
     return out;

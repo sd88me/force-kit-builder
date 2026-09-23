@@ -82,6 +82,7 @@
         renderRoots();
         renderIndexSummary();
         renderPadDetail();
+        renderPadColors();
     }
 
     function iconBtn(label, on, onClick, extraClass) {
@@ -101,6 +102,8 @@
             const el = document.createElement('div');
             const cat = pad.sample ? pad.sample.category : pad.role;
             el.className = 'kb-pad kb-cat-' + cat;
+            const catColor = (STATE.config.pad_colors || {})[cat];
+            if (catColor) el.style.background = '#' + catColor;
             if (!pad.sample) el.classList.add('kb-empty');
             if (pad.locked) el.classList.add('kb-locked');
             if (pad.sample && pad.sample.missing) el.classList.add('kb-missing');
@@ -240,6 +243,29 @@
         row.appendChild(rerollBtn);
         row.appendChild(clearBtn);
         body.appendChild(row);
+    }
+
+    function renderPadColors() {
+        const body = document.getElementById('kb-pad-colors-body');
+        body.innerHTML = '';
+        const colors = STATE.config.pad_colors || {};
+        (STATE.categories || []).forEach((cat) => {
+            const row = document.createElement('label');
+            row.className = 'kb-pad-color-row';
+            const swatch = document.createElement('input');
+            swatch.type = 'color';
+            swatch.value = '#' + (colors[cat] || '555555');
+            swatch.addEventListener('change', () => {
+                const next = Object.assign({}, colors);
+                next[cat] = swatch.value.replace('#', '');
+                run(() => api('SET_PAD_COLORS', { colors: next }));
+            });
+            const name = document.createElement('span');
+            name.textContent = cat;
+            row.appendChild(swatch);
+            row.appendChild(name);
+            body.appendChild(row);
+        });
     }
 
     function renderRoots() {
@@ -458,6 +484,9 @@
         document.getElementById('kb-browser-close').addEventListener('click', closeBrowser);
         document.getElementById('kb-browser-up').addEventListener('click', browserUp);
         document.getElementById('kb-browser-select').addEventListener('click', browserSelect);
+
+        document.getElementById('kb-pad-colors-reset').addEventListener('click', () =>
+            run(() => api('SET_PAD_COLORS', { colors: {} }), 'Pad colours reset to defaults'));
 
         document.getElementById('kb-rescan').addEventListener('click', () => run(() => api('RESCAN', {
             scan_filters: {

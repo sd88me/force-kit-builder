@@ -161,12 +161,39 @@ function padGroupMap() {
 }
 
 /*
+ * Pad colours: `<ProgramPads-v2.10>`'s `pads.valueN` (N=0..15, pad N+1) holds
+ * the pad's LED colour as a plain decimal RGB integer (R*65536+G*256+B) —
+ * confirmed by pulling real factory .xpm files off a live Force and decoding
+ * their `pads` block (e.g. #7f0000 -> 8323072), not guessed. `value16..127`
+ * (unused-pad slots in every real 16-pad export inspected) and `universalPad`
+ * are left at the reference template's own values; only the 16 real pad
+ * slots are touched, one regex-anchored replace per pad so the rest of the
+ * template (JSON key order, whitespace, XML-escaping) stays byte-identical.
+ * A pad whose role has no entry in `padColors` keeps the template's default
+ * for that slot.
+ */
+function buildProgPads(kit, padColors) {
+    if (!padColors) return XPM_PROGPADS;
+    let s = XPM_PROGPADS;
+    const pads = (kit && kit.pads) || [];
+    for (let i = 0; i < KIT_PADS; i++) {
+        const role = pads[i] && pads[i].role;
+        const hex = role ? padColors[role] : null;
+        if (!hex || !/^[0-9a-fA-F]{6}$/.test(hex)) continue;
+        const dec = parseInt(hex, 16);
+        s = s.replace(new RegExp(`&quot;value${i}&quot;: \\d+`), `&quot;value${i}&quot;: ${dec}`);
+    }
+    return s;
+}
+
+/*
  * buildXpm(kit, opts) -> { text, warnings, padCount, manifest }
  * `manifest` is [{ pad, sampleName, sourcePath, ext, destName }] for the
  * assigned pads. destName = sampleName + source ext — the file the MPC wants
  * sitting next to the .xpm. `opts.frameCount(sourcePath) -> number|null` is
  * called once per assigned pad to fill in Layer 1's <SliceEnd>; omit it (or
  * return null/0) and that pad's SliceEnd stays 0, with a warning.
+ * `opts.padColors` (optional) -> { category: 'rrggbb' } — see buildProgPads().
  */
 export function buildXpm(kit, opts) {
     const frameCount = (opts && typeof opts.frameCount === 'function') ? opts.frameCount : null;
@@ -205,7 +232,7 @@ export function buildXpm(kit, opts) {
     const progName = `    <ProgramName>${xmlEscape(name)}</ProgramName>\n`;
     const text =
         toCRLF(XPM_HEAD + progName) +
-        XPM_PROGPADS +
+        buildProgPads(kit, opts && opts.padColors) +
         toCRLF(XPM_PROG_PARAMS + instrs.join('') + '    </Instruments>\n' + padNoteMap() + padGroupMap()) +
         toCRLF(XPM_TAIL);
 

@@ -8,11 +8,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { assert, eq } from './assert.js';
-import { configureDataDir } from '../core/sample_index.mjs';
-import { createKit } from '../core/kit_model.mjs';
+import { configureDataDir, loadConfig } from '../core/sample_index.mjs';
+import { createKit, sampleFromRecord } from '../core/kit_model.mjs';
+import { DEFAULT_PAD_COLORS } from '../core/pad_colors.mjs';
 import {
     sanitizeFilename, saveKit, loadKit, kitsDir, currentKitPath,
-    loadPrefs, savePrefs, generatedKitName, writeJsonAtomic
+    loadPrefs, savePrefs, generatedKitName, writeJsonAtomic, savePadColors,
+    exportMpcXpm
 } from '../core/storage.mjs';
 
 function withScratchDir(fn) {
@@ -87,6 +89,46 @@ export const tests = [
             const bad = loadKit(badPath);
             eq(bad.ok, false);
             assert(bad.error.startsWith('parse:'));
+        });
+    }},
+
+    { name: 'savePadColors merges over defaults, drops unknown keys, rejects bad hex', fn() {
+        withScratchDir((dir) => {
+            const merged = savePadColors({ kick: 'ff0000', bogus_category: '00ff00', hat: 'not-a-color' });
+            eq(merged.kick, 'ff0000');
+            eq(merged.hat, DEFAULT_PAD_COLORS.hat);   // malformed value ignored, default kept
+            assert(!('bogus_category' in merged), 'unknown category should not be stored');
+            eq(merged.other, DEFAULT_PAD_COLORS.other);   // untouched categories keep their default
+
+            const cfg = loadConfig();
+            eq(cfg.pad_colors.kick, 'ff0000');   // loadConfig() picks up the persisted write
+        });
+    }},
+
+    { name: 'savePadColors with {} resets every category to its default', fn() {
+        withScratchDir((dir) => {
+            savePadColors({ kick: 'ff0000' });
+            const reset = savePadColors({});
+            eq(reset, DEFAULT_PAD_COLORS);
+        });
+    }},
+
+    { name: 'exportMpcXpm threads the saved pad-colour config through to the .xpm', fn() {
+        withScratchDir((dir) => {
+            savePadColors({ kick: 'ff0000' });   // pad 1's role in DEFAULT_PAD_LAYOUT
+
+            const kit = createKit();
+            kit.pads[0].sample = sampleFromRecord({
+                filesystem_path: '/samples/kick/boom.wav',
+                source: 'library', category: 'Kick', filename: 'boom.wav', extension: '.wav'
+            });
+
+            const outDir = path.join(dir, 'export-out');
+            const r = exportMpcXpm(kit, 'Coloured Kit', outDir);
+            assert(r.ok, JSON.stringify(r));
+
+            const xpm = fs.readFileSync(r.path, 'utf8');
+            assert(xpm.includes('&quot;value0&quot;: 16711680'), 'pad 1 should carry ff0000 (16711680)');
         });
     }},
 

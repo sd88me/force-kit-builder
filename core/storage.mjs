@@ -22,6 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { KB_DIR, CONFIG_PATH } from './sample_index.mjs';
 import { DEFAULT_PAD_LAYOUT } from './kit_model.mjs';
+import { mergePadColors } from './pad_colors.mjs';
 import { validateKit } from './validation.mjs';
 import { wavFrameCount } from './wav_info.mjs';
 import { exportXpm as buildAndWriteXpm } from '../exporters/mpc_xpm.mjs';
@@ -125,6 +126,20 @@ export function savePadLayoutEntry(padIndex, categories) {
     cfg.pad_layout = layout;
     hMkdir(KB_DIR);
     return writeJsonAtomic(CONFIG_PATH, cfg) ? layout : null;
+}
+
+/*
+ * Category -> hex colour map, editable via the web GUI's colour pickers.
+ * `mergePadColors` fills in any missing/malformed category with its default
+ * and drops unknown keys, so a full 23-entry map is always what's stored and
+ * what every future reader (XPM export, shadow-GUI colour lookup) gets back.
+ */
+export function savePadColors(colors) {
+    const cfg = readRawConfig();
+    const merged = mergePadColors(colors);
+    cfg.pad_colors = merged;
+    hMkdir(KB_DIR);
+    return writeJsonAtomic(CONFIG_PATH, cfg) ? merged : null;
 }
 
 /* ---- filename sanitisation -------------------------------------------- */
@@ -286,13 +301,15 @@ function sampleFrameCount(p) {
 export function exportMpcXpm(kit, name, destDir) {
     if (!destDir) return { ok: false, errors: ['no destination folder selected'], warnings: [] };
     hMkdir(destDir);
+    const padColors = mergePadColors(readRawConfig().pad_colors);
     return buildAndWriteXpm(kit, {
         dir: destDir,
         name: name || kit.name || 'Kit Builder',
         mkdir: (p) => hMkdir(p),
         write: (p, s) => hWrite(p, s),
         copy: (src, dest) => { try { fs.copyFileSync(src, dest); return true; } catch (e) { return false; } },
-        frameCount: (p) => sampleFrameCount(p)
+        frameCount: (p) => sampleFrameCount(p),
+        padColors
     });
 }
 

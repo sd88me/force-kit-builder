@@ -141,7 +141,31 @@
     color: #fff;
 }
 
-/* Category colour coding — loosely mirrors MPC pad-colour conventions. */
+.kb-pad-colors-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 10px;
+}
+
+.kb-pad-color-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8rem;
+}
+
+.kb-pad-color-row input[type="color"] {
+    width: 24px;
+    height: 20px;
+    padding: 0;
+    border: none;
+    background: none;
+    cursor: pointer;
+}
+
+/* Category colour coding — loosely mirrors MPC pad-colour conventions.
+ * Fallback only: client.js sets an inline background from config.pad_colors
+ * (the user-editable map) whenever one exists, which always wins over this. */
 .kb-cat-kick, .kb-cat-snare, .kb-cat-rim, .kb-cat-clap { background: #7a3b3b; }
 .kb-cat-hat, .kb-cat-closed_hat, .kb-cat-open_hat { background: #7a6a2f; }
 .kb-cat-tom, .kb-cat-conga, .kb-cat-percussion { background: #3b6b4f; }

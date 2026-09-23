@@ -5,6 +5,7 @@ import { assert, eq } from './assert.js';
 import { createKit, sampleFromRecord } from '../core/kit_model.mjs';
 import { DEFAULT_CONFIG } from '../core/sample_index.mjs';
 import { buildXpm, exportXpm, mpcSampleName, manifestText } from '../exporters/mpc_xpm.mjs';
+import { DEFAULT_PAD_COLORS } from '../core/pad_colors.mjs';
 
 function rec(cat, name, root) {
     const base = root || '/samples';
@@ -233,5 +234,24 @@ export const tests = [
         assert(names[0] === 'boom', names[0]);
         assert(names[0] !== names[1], names.join(' == '));    // 2nd disambiguated (e.g. "boom 2")
         for (const nm of names) assert(text.includes(`<SampleName>${nm}</SampleName>`), `missing ${nm}`);
+    }},
+
+    { name: 'padColors sets each pad\'s ProgramPads-v2.10 value to its role\'s colour', fn() {
+        const kit = kitWith([[0, 'Kick', 'k.wav']], 'Coloured');   // pad 1 role = 'kick' (DEFAULT_PAD_LAYOUT)
+        const { text } = buildXpm(kit, { padColors: DEFAULT_PAD_COLORS });
+        const dec = parseInt(DEFAULT_PAD_COLORS.kick, 16);
+        assert(text.includes(`&quot;value0&quot;: ${dec}`), `pad 1 (value0) should carry kick's colour (${dec})`);
+    }},
+
+    { name: 'no padColors leaves ProgramPads-v2.10 as the template default', fn() {
+        const kit = kitWith([[0, 'Kick', 'k.wav']], 'Uncoloured');
+        const { text } = buildXpm(kit);
+        assert(text.includes('&quot;value0&quot;: 16711680'), 'template default (pad 1) unchanged');
+    }},
+
+    { name: 'a role with no padColors entry keeps that pad slot at its template default', fn() {
+        const kit = kitWith([[0, 'Kick', 'k.wav']], 'PartialColours');
+        const { text } = buildXpm(kit, { padColors: { snare: 'ff0000' } });   // no 'kick' entry
+        assert(text.includes('&quot;value0&quot;: 16711680'), 'pad 1 (kick, no override) unchanged');
     }}
 ];
