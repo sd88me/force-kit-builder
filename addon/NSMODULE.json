@@ -10,6 +10,6 @@
     { "NAME": "ctrl-sock flag", "VALUE": "--ctrl-sock" },
     { "NAME": "Kit Builder daemon's control socket path", "VALUE": "/tmp/kitbuilder_ctrl.sock" },
     { "NAME": "mix-slot flag", "VALUE": "--mix-slot" },
-    { "NAME": "ForceAudioJack voice slot (0-3; needs live confirmation - 0=Maze Voice, 1=JV-880, 2=DX7 per their own NSMODULE.json comments, 3 appears free but wasn't checked against the real device's /dev/shm - see DESIGN.md's v3 open items)", "VALUE": "3" }
+    { "NAME": "ForceAudioJack voice slot (0-7; needs live confirmation - 0=Maze Voice, 1=JV-880, 2=DX7, 4=Crate Digger per their own NSMODULE.json comments - see DESIGN.md's v3 open items)", "VALUE": "3" }
   ]
 }
