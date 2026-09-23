@@ -148,6 +148,7 @@ theme_tabs=1a1a1a
 '''
 
 ACCENT_HEX = 'ff8f00'   # same hex as theme_accent - button color= override
+PLAY_COLOR_HEX = 'e53935'   # PLAY buttons (PADS grid + DETAIL) - red, distinct from theme_accent orange
 
 TOPBAR_LASTPLAYED = 'readout cx=840 cy=36 w=780 h=48 label="" get=status'
 
@@ -231,7 +232,7 @@ def pads_cell(pad_num, pad_index, x, y):
         # category (force-shadow's frame color_key=, same mechanism as
         # DETAIL's PAD DETAIL frame) - daemon.mjs's pad_color_N.
         f'frame   x={x} y={y} w={PADS_CELL_W} h={PADS_CELL_H} title="PAD {pad_num}" color_key=pad_color_{pad_index}',
-        f'button  cx={left_cx} cy={mid_cy} label="PLAY" key=play_pad_{pad_index} color={ACCENT_HEX}',
+        f'button  cx={left_cx} cy={mid_cy} label="PLAY" key=play_pad_{pad_index} color={PLAY_COLOR_HEX}',
         f'readout cx={right_cx} cy={pill_cy} w=130 h=30 label="" get=pad_pill_{pad_index} '
         f'key=detail_pad_sel val={pad_index} goto={DETAIL_TAB_INDEX}',
         f'button  cx={right_cx} cy={reroll_cy} label="REROLL" key=reroll_pad_{pad_index}',
@@ -330,7 +331,7 @@ def detail_tab():
         f'get=detail_pad_name idx=detail_pad_sel count=detail_pad_count min=0 max=15 numbered=1',
         f'knob    cx={nav_cx} cy={knob_cy} r={knob_r} label="GAIN" key=detail_gain min=0 max=2 pct=50',
         f'readout cx={dbx + 640} cy={stepper_cy} w=700 h=44 label="" get=detail_sample_info',
-        f'button  cx={dbx + 1120} cy={stepper_cy} label="   PLAY   " key=detail_play color={ACCENT_HEX}',
+        f'button  cx={dbx + 1120} cy={stepper_cy} label="   PLAY   " key=detail_play color={PLAY_COLOR_HEX}',
         f'toggle  cx={dbx + 350} cy={row2_cy} label="LOCK" key=detail_lock',
         f'button  cx={dbx + 650} cy={row2_cy} label="CLEAR" key=detail_clear',
         f'button  cx={dbx + 950} cy={row2_cy} label="REROLL" key=detail_reroll',
