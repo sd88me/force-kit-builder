@@ -41,11 +41,11 @@ const FULL = fakeIndex({
  * "other" sentinel expanded). */
 const OTHER = otherPoolCats(DEFAULT_CONFIG, DEFAULT_CONFIG.pad_layout);
 const POOLS = [
-    ['kick'], ['rim', 'snare'], ['snare'], ['clap', 'percussion'],
-    ['percussion', 'tom', 'conga'],
+    ['kick'], ['snare'], ['rim', 'snare'], ['clap', 'percussion'],
     ['hat', 'closed_hat', 'open_hat'], ['closed_hat', 'hat'], ['open_hat', 'hat'],
-    ['ride', 'cymbal', 'crash'], ['tom', 'percussion', 'conga'], ['percussion'], ['fx'],
-    OTHER, OTHER, OTHER, OTHER
+    ['percussion'], ['percussion', 'tom', 'conga'], ['tom', 'percussion', 'conga'],
+    ['ride', 'cymbal', 'crash'],
+    OTHER, OTHER, OTHER, OTHER, ['fx']
 ];
 
 function mixedIndex() {
@@ -106,17 +106,17 @@ export const tests = [
         const seen = new Set();
         for (let s = 1; s <= 60; s++) {
             const r = run(createKit(DEFAULT_CONFIG), FULL, { seed: s * 31 + 7 });
-            seen.add(r.pads[1].sample.category);   // pad 2 = rim|snare
+            seen.add(r.pads[2].sample.category);   // pad 3 = rim|snare
         }
-        assert(seen.has('rim') && seen.has('snare'), `pad 2 only ever drew [${[...seen]}]`);
+        assert(seen.has('rim') && seen.has('snare'), `pad 3 only ever drew [${[...seen]}]`);
     }},
 
-    { name: 'fx appears on pad 12 and can also land on the Other pads', fn() {
+    { name: 'fx appears on pad 16 and can also land on the Other pads', fn() {
         let fxOnOther = false;
         for (let s = 1; s <= 80 && !fxOnOther; s++) {
             const r = run(createKit(DEFAULT_CONFIG), FULL, { seed: s * 17 + 1 });
-            eq(r.pads[11].sample.category, 'fx');                       // pad 12 always fx
-            for (let i = 12; i < 16; i++) if (r.pads[i].sample.category === 'fx') fxOnOther = true;
+            eq(r.pads[15].sample.category, 'fx');                       // pad 16 always fx
+            for (let i = 11; i < 15; i++) if (r.pads[i].sample.category === 'fx') fxOnOther = true;
         }
         assert(fxOnOther, 'fx never showed up on an Other pad across 80 seeds');
     }},
@@ -165,23 +165,23 @@ export const tests = [
     }},
 
     { name: 'an empty pool leaves the pad unresolved (no fallback)', fn() {
-        // kick + snare + a bit of "other" only — nothing for pads 4..12
+        // kick + snare + a bit of "other" only — nothing for pads 4..11, 16
         const idx = fakeIndex({ kick: 5, snare: 5, other: 50 });
         const res = run(createKit(DEFAULT_CONFIG), idx);
         const un = res.unresolved.map((u) => u.pad);
         // pad 4 = [clap, percussion] -> both empty -> unresolved
         assert(un.indexOf(4) !== -1, 'pad 4 should be unresolved');
         assert(un.indexOf(6) !== -1, 'pad 6 (hat) should be unresolved');
-        assert(un.indexOf(12) !== -1, 'pad 12 (fx) should be unresolved');
+        assert(un.indexOf(16) !== -1, 'pad 16 (fx) should be unresolved');
         eq(res.pads[3].sample, null);
-        // pads 1..3 resolve, pads 13..16 resolve from "other"
+        // pads 1..3 resolve, pads 12..15 resolve from "other"
         assert(res.pads[0].sample && res.pads[1].sample && res.pads[2].sample);
-        for (let i = 12; i < 16; i++) assert(res.pads[i].sample, `Other pad ${i + 1} should fill from "other"`);
+        for (let i = 11; i < 15; i++) assert(res.pads[i].sample, `Other pad ${i + 1} should fill from "other"`);
         assert(res.warning && res.warning.includes('unavailable'), res.warning);
     }},
 
     { name: 'small pool relaxes duplicate-prevention and reports it', fn() {
-        // pads 13..16 all draw the Other pool. fx=1 is claimed by pad 12 first,
+        // pads 12..15 all draw the Other pool. fx=1 is claimed by pad 16 first,
         // leaving just other=2 unique samples for four Other pads -> relaxation.
         const idx = fakeIndex({
             kick: 5, snare: 5, rim: 5, clap: 5, hat: 5, closed_hat: 5, open_hat: 5,
@@ -190,7 +190,7 @@ export const tests = [
         });
         const res = run(createKit(DEFAULT_CONFIG), idx);
         assert(res.relaxed.length > 0, 'expected duplicate relaxation on the Other pads');
-        for (let i = 12; i < 16; i++) assert(res.pads[i].sample, `pad ${i + 1} should be assigned`);
+        for (let i = 11; i < 15; i++) assert(res.pads[i].sample, `pad ${i + 1} should be assigned`);
     }},
 
     { name: 'rerollPad changes one unlocked pad and avoids kit duplicates + current', fn() {

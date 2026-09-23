@@ -14,21 +14,30 @@ export const PAD_MIDI_NOTES = Array.from({ length: 16 }, (_, i) => 36 + i);
 
 /* Each pad draws from a UNION of categories. `["other"]` is a sentinel: the
  * assignment engine expands it to every category with no dedicated pad slot,
- * plus `fx`. Used only when the config omits `pad_layout`. */
+ * plus `fx`. Used only when the config omits `pad_layout`.
+ *
+ * Same 12 category-groups (+ 4 generic `other` slots) as before, but ordered
+ * to match the real Akai factory-kit convention confirmed by scanning 250
+ * factory .xpm kits on a live Force (pad position -> dominant sample
+ * category): kick leads at pad 1, snare/clap early, hats mid-front,
+ * percussion/toms/cymbals mid-back, `fx` moved to pad 16 (74% of real fx
+ * samples land there). The `other` slots sit at 12-15 — real kits use that
+ * zone for melodic/synth content this drum-focused layout has no category
+ * for, so there's no authentic position to match there. */
 export const DEFAULT_PAD_LAYOUT = [
     ['kick'],                          // 1
-    ['rim', 'snare'],                  // 2
-    ['snare'],                         // 3
+    ['snare'],                         // 2
+    ['rim', 'snare'],                  // 3
     ['clap', 'percussion'],            // 4
-    ['percussion', 'tom', 'conga'],    // 5
-    ['hat', 'closed_hat', 'open_hat'], // 6  generic hat pad (any kind)
-    ['closed_hat', 'hat'],             // 7  falls back to generic hats
-    ['open_hat', 'hat'],               // 8  falls back to generic hats
-    ['ride', 'cymbal', 'crash'],       // 9
+    ['hat', 'closed_hat', 'open_hat'], // 5  generic hat pad (any kind)
+    ['closed_hat', 'hat'],             // 6  falls back to generic hats
+    ['open_hat', 'hat'],               // 7  falls back to generic hats
+    ['percussion'],                    // 8
+    ['percussion', 'tom', 'conga'],    // 9
     ['tom', 'percussion', 'conga'],    // 10
-    ['percussion'],                    // 11
-    ['fx'],                            // 12
-    ['other'], ['other'], ['other'], ['other']   // 13-16
+    ['ride', 'cymbal', 'crash'],       // 11
+    ['other'], ['other'], ['other'], ['other'],   // 12-15
+    ['fx']                              // 16
 ];
 
 function nowIso() { return new Date().toISOString(); }
