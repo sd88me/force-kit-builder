@@ -26,14 +26,16 @@
  * only being triggerable from the shadow page itself (not from physically
  * playing a routed track's pads) - an accepted tradeoff, not an oversight.
  *
- * v1 is deliberately not monophonic/cutoff-on-retrigger: ring_push() only
- * ever appends at the ring's head (same as every other producer in this
- * family - see dx7_host.cpp's own ring_push()), it does not reset head/tail
- * on a new trigger. Concurrently issuing a reset while the consumer thread
- * inside MPC is mid-read would be a real race, not a simplification worth
- * making. In practice this means rapid re-taps layer/queue rather than one
- * cutting the other off - reasonable drum-kit behaviour for short
- * one-shots, revisit only if it turns out not to be in real use.
+ * Playback is monophonic with cutoff-on-retrigger, and plays the whole
+ * sample however long it is. The ring is only AI_RING_FRAMES (~1.5 s at
+ * 44.1k), so instead of pushing a whole decoded sample in one go (which
+ * used to truncate anything longer than that), a feeder thread streams the
+ * current voice into the ring, keeping only FEED_LEAD_FRAMES queued ahead
+ * of the consumer. A new PLAY just swaps the current voice under a mutex:
+ * the old one gets a short fade-out appended and the new one follows, so
+ * the cutoff happens within ~FEED_LEAD_FRAMES without ever touching
+ * head/tail from the producer side except the normal append (resetting
+ * the ring mid-read would be a real race with the consumer inside MPC).
  */
 
 #include <cstdio>
@@ -44,6 +46,8 @@
 #include <string>
 #include <thread>
 #include <chrono>
+#include <memory>
+#include <mutex>
 
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -273,6 +277,74 @@ static std::vector<float> resample_to_44100(const std::vector<float> &src, uint3
     return out;
 }
 
+/* ---- streaming voice: one sample at a time, fed into the ring by
+ * feeder_thread() a little ahead of the consumer ---------------------- */
+
+static const uint32_t FEED_LEAD_FRAMES = 2048;   /* ~46 ms queued ahead = max retrigger latency */
+static const uint32_t FADE_FRAMES = 128;         /* ~3 ms fade on cutoff, avoids a click */
+
+struct Voice {
+    std::vector<float> data;   /* interleaved stereo @ 44100 */
+    uint32_t frames = 0;
+    uint32_t pos = 0;
+};
+
+static std::mutex g_voice_mu;
+static std::unique_ptr<Voice> g_voice;
+static std::unique_ptr<Voice> g_pending;
+
+static void start_voice(std::vector<float> &&data) {
+    std::unique_ptr<Voice> v(new Voice);
+    v->frames = (uint32_t)(data.size() / 2);
+    v->data = std::move(data);
+    std::lock_guard<std::mutex> lk(g_voice_mu);
+    g_pending = std::move(v);
+}
+
+static uint32_t ring_queued() {
+    uint32_t head = g_shm->head;
+    uint32_t tail = __atomic_load_n(&g_shm->tail, __ATOMIC_ACQUIRE);
+    return (head - tail) & (AI_RING_FRAMES - 1);
+}
+
+static void feeder_step() {
+    if (!g_shm) return;
+    std::lock_guard<std::mutex> lk(g_voice_mu);
+
+    if (g_pending) {
+        /* cutoff: fade out whatever is left of the old voice, then switch */
+        if (g_voice && g_voice->pos < g_voice->frames) {
+            uint32_t n = g_voice->frames - g_voice->pos;
+            if (n > FADE_FRAMES) n = FADE_FRAMES;
+            float fade[FADE_FRAMES * 2];
+            const float *src = &g_voice->data[(size_t)g_voice->pos * 2];
+            for (uint32_t i = 0; i < n; i++) {
+                float g = 1.0f - (float)(i + 1) / (float)n;
+                fade[2 * i] = src[2 * i] * g;
+                fade[2 * i + 1] = src[2 * i + 1] * g;
+            }
+            ring_push(fade, n);
+        }
+        g_voice = std::move(g_pending);
+    }
+
+    if (!g_voice || g_voice->pos >= g_voice->frames) return;
+    uint32_t queued = ring_queued();
+    if (queued >= FEED_LEAD_FRAMES) return;
+    uint32_t n = FEED_LEAD_FRAMES - queued;
+    uint32_t left = g_voice->frames - g_voice->pos;
+    if (n > left) n = left;
+    ring_push(&g_voice->data[(size_t)g_voice->pos * 2], n);
+    g_voice->pos += n;
+}
+
+static void feeder_thread() {
+    while (true) {
+        feeder_step();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+}
+
 /* ---- play one pad: shared by the real listen server and --test-full ----- */
 
 struct PlayResult { bool ok; std::string msg; };
@@ -288,9 +360,8 @@ static PlayResult play_pad(int padIndex) {
 
     std::vector<float> resampled = resample_to_44100(w.interleaved_stereo, w.frames, w.rate);
     uint32_t outFrames = (uint32_t)(resampled.size() / 2);
-    if (outFrames > AI_RING_FRAMES - 1) outFrames = AI_RING_FRAMES - 1;   /* v1: truncate a very long sample */
 
-    ring_push(resampled.data(), outFrames);
+    start_voice(std::move(resampled));
     fprintf(stderr, "[kb-preview] pad %d -> %s (%u frames)\n", padIndex + 1, path.c_str(), outFrames);
     return { true, "" };
 }
@@ -387,6 +458,7 @@ int main(int argc, char **argv) {
         if (!shm_setup()) { printf("SHM_SETUP_FAILED\n"); return 1; }
         PlayResult r = play_pad(padIndex);
         if (!r.ok) { printf("PLAY_FAILED: %s\n", r.msg.c_str()); return 1; }
+        feeder_step();   /* no consumer here: just the first FEED_LEAD_FRAMES */
         printf("ring_head=%u ring_frames_written=%llu\n",
                g_shm->head, (unsigned long long)g_shm->frames_written);
         return 0;
@@ -403,6 +475,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    std::thread(feeder_thread).detach();
     run_play_server();   /* blocks forever, accepting PLAY <n> connections */
     return 0;
 }

@@ -281,6 +281,7 @@ def detail_tab():
 
     lines = [
         '[tab DETAIL]',
+        TOPBAR_LASTPLAYED,   # same status readout as PADS - GENERATE/CLEAR/NORMALISE/EXPORT live here
         f'frame   x={cfx} y={cfy} w={cfw} h={cfh} title="CATEGORY - TAP TO TOGGLE"',
     ]
 

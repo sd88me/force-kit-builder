@@ -412,7 +412,10 @@ function doSet(key, value) {
             }
             const r = storage.exportMpcXpm(state.kit, undefined, state.lastExportDir);
             if (r.ok) {
-                state.status = `Exported to ${r.path}`;
+                /* lead with the kit name - the readout is ~50 chars wide, so a
+                 * full path would push the one thing worth confirming off the end */
+                const kitName = path.basename(r.path).replace(/\.xpm$/i, '');
+                state.status = `EXPORTED "${kitName}" (${r.padCount} pads) -> ${path.basename(path.dirname(r.path))}`;
             } else {
                 state.status = `Export failed: ${(r.errors || []).join('; ') || 'unknown error'}`;
             }
