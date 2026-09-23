@@ -30,11 +30,25 @@
  * PADS page (v4.2: back to one 16-pad page - force-shadow's own
  * MAX_FRAMES was raised from 6 to 20 rather than keeping the v4.1
  * three-page split; see shadow_page.conf's header): per-pad-indexed keys
- * (pad_lock_0..15, reroll_pad_0..15, play_pad_0..15, pad_path_0..15) -
- * each pad box has its own LOCK/REROLL/PLAY directly, so there's no
- * selection state to track for these. CLEAR isn't exposed here - 16 pads
- * x 4 controls is exactly MAX_WIDGETS=64 with zero room for the top-bar
- * "last played" readout this page also needs; lives on DETAIL only.
+ * (pad_pill_0..15, reroll_pad_0..15, play_pad_0..15, pad_lock_0..15,
+ * pad_path_0..15) - each pad box has its own PLAY/pill/REROLL directly,
+ * so there's no selection state to track for these. CLEAR isn't exposed
+ * here - 16 pads x 4 controls is exactly MAX_WIDGETS=64 with zero room
+ * for the top-bar "last played" readout this page also needs; lives on
+ * DETAIL only.
+ *
+ * v4.3: the per-pad LOCK toggle was replaced with a readout "pill"
+ * (pad_pill_N) - tapping it SETs detail_pad_sel (via the widget's own
+ * key=/val=, force_shadow.c's readout SET-before-goto support) and jumps
+ * to DETAIL in one tap, where the real LOCK toggle already lived next to
+ * GENERATE ALL/CLEAR ALL. pad_pill_N's GET text is an abbreviated
+ * category (CAT_ABBR below - the pill is only ~8 characters wide on real
+ * hardware, see tools/gen_shadow_page.py's own comment), "L:" prefixed
+ * when locked so lock state still shows at a glance without its own
+ * control. pad_lock_N's SET/GET stay wired below (harmless, and kept for
+ * anything else that might poll it) even though no PADS-tab widget calls
+ * SET pad_lock_N any more - DETAIL's own detail_lock is the one real
+ * user-facing lock control now.
  *
  * DETAIL page: selection-based keys instead (detail_pad_sel/
  * detail_pad_name/detail_pad_count/detail_sample_info/detail_gain/
@@ -86,6 +100,7 @@ const randomAssign = await import(u('core/random_assign.mjs'));
 const storage = await import(u('core/storage.mjs'));
 const loudness = await import(u('core/loudness.mjs'));
 const wavRms = await import(u('core/wav_rms.mjs'));
+const padColors = await import(u('core/pad_colors.mjs'));
 
 /* Same data dir the nodeServer plugin points at - see plugin's index.js
  * ensureCore(), CORE_DIR is identical here since both resolve relative to
@@ -161,6 +176,34 @@ function padSampleText(i, withPadPrefix) {
     return shadowFontSafe(`${prefix}${p.sample.filename} - ${p.sample.category}${lock}`);
 }
 
+/* Abbreviated category codes for the PADS-tab pill (pad_pill_N) - the
+ * pill is ~8 characters wide on real hardware (force_shadow.c's readout
+ * draws at a fixed 14px/char, FONT_HI_2_0_W; see gen_shadow_page.py's own
+ * comment, confirmed against source and a live-preview mockup, not
+ * assumed), so the full category name/sample filename padSampleText()
+ * above uses doesn't fit here. Mirrors core/sample_index.mjs's ROLE_ORDER
+ * (all 23 categories); an unrecognized category (shouldn't happen, but
+ * config.pad_layout is user-editable) falls back to its own first 4
+ * characters rather than an empty pill. */
+const CAT_ABBR = {
+    kick: 'KICK', snare: 'SNR', rim: 'RIM', clap: 'CLAP',
+    hat: 'HAT', closed_hat: 'CHAT', open_hat: 'OHAT',
+    tom: 'TOM', conga: 'CNGA', percussion: 'PERC',
+    crash: 'CRSH', ride: 'RIDE', cymbal: 'CYM', fx: 'FX',
+    glitch: 'GLI', vox: 'VOX', bass: 'BASS', synth: 'SYN',
+    stab: 'STB', chord: 'CHD', lead: 'LEAD', pad: 'PAD',
+    other: 'OTH'
+};
+
+function padPillText(i) {
+    const p = state.kit.pads[i];
+    if (!p) return '';
+    if (!p.sample) return 'EMPTY';
+    const cat = p.sample.category;
+    const abbr = CAT_ABBR[cat] || String(cat || '').slice(0, 4).toUpperCase();
+    return shadowFontSafe(p.locked ? `L:${abbr}` : abbr);
+}
+
 /* ---- DETAIL page helpers --------------------------------------------------
  *
  * Pool assignment (which categories a pad draws from) is config-wide, not
@@ -191,7 +234,7 @@ const CATEGORY_RE = /^detail_cat_(.+)$/;
  * header comment) replaced that with per-pad-indexed keys instead: no
  * selection state to track, each widget just names its own pad index. */
 
-const PAD_KEY_RE = /^(pad_lock|pad_path|reroll_pad)_(\d+)$/;
+const PAD_KEY_RE = /^(pad_lock|pad_path|pad_pill|reroll_pad)_(\d+)$/;
 
 function doGet(key) {
     const m = key.match(PAD_KEY_RE);
@@ -203,6 +246,7 @@ function doGet(key) {
         const p = state.kit.pads[i];
         if (kind === 'pad_lock') return p && p.locked ? '1' : '0';
         if (kind === 'pad_path') return (p && p.sample && p.sample.filesystem_path) || '';
+        if (kind === 'pad_pill') return padPillText(i);
         return '';
     }
     if (key === 'status') return shadowFontSafe(state.status);
@@ -220,6 +264,14 @@ function doGet(key) {
         syncKit();
         const p = state.kit.pads[state.detailSel];
         return p && p.locked ? '1' : '0';
+    }
+    if (key === 'detail_pad_color') {
+        syncKit();
+        const p = state.kit.pads[state.detailSel];
+        const cat = (p && p.sample && p.sample.category) || (p && p.role) || 'other';
+        const cfg = sampleIndex.loadConfig();
+        const colors = (cfg.pad_colors) || padColors.DEFAULT_PAD_COLORS;
+        return colors[cat] || padColors.DEFAULT_PAD_COLORS[cat] || padColors.DEFAULT_PAD_COLORS.other;
     }
     const catMatch = key.match(CATEGORY_RE);
     if (catMatch) {

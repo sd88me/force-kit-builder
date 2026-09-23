@@ -58,9 +58,18 @@ HEADER = '''# ForceKitBuilder — shadow-GUI page (v4.2: two pages - a single 16
 # ~125KB total, negligible next to that same table's ~11MB
 # MAX_WIDGETS-driven allocation. MAX_WIDGETS=64 is unchanged and is a
 # real constraint again at 16 pads/page: back to 3 controls per pad
-# (LOCK/REROLL/PLAY), CLEAR doesn't fit alongside the top-bar "last
-# played" readout on one 16-pad page, same tradeoff v4's first pass
-# already made for the same reason.
+# (PLAY/pill/REROLL - see v4.3 below), CLEAR doesn't fit alongside the
+# top-bar "last played" readout on one 16-pad page, same tradeoff v4's
+# first pass already made for the same reason.
+#
+# v4.3 (2026-09-23, later still): the third control per pad is now a
+# tap-to-select-and-jump-to-DETAIL readout "pill" (abbreviated category,
+# "L:" prefixed when locked), not a LOCK toggle - see pads_cell()'s own
+# comment in tools/gen_shadow_page.py for the full reasoning and the
+# force_shadow.c engine change (readout key=/val= SET-before-goto) it
+# depends on. Locking itself didn't move - DETAIL's own LOCK toggle
+# still does that, next to GENERATE ALL/CLEAR ALL, the actions it
+# protects against.
 #
 # page=8, not 1-7: only seven SHIFT+SCENE-N combos physically exist, and
 # on the real device all seven were already taken (DX7, JV-880, Maze
@@ -163,8 +172,43 @@ def button_width(label):
 # from 6 - see HEADER), so all 16 per-pad frames fit on one tab; asserted
 # below rather than just assumed. MAX_WIDGETS=64 is still real though:
 # 16 pads x 4 controls would be exactly 64 with zero room for the top-bar
-# "last played" readout this page also needs - CLEAR stays on DETAIL,
-# same tradeoff as v4's original single-page design.
+# "last played" readout this page also needs.
+#
+# v4.3 (readout pill, replacing the per-pad LOCK toggle): DETAIL already
+# has its own LOCK toggle (driven by its pad-select stepper) right next
+# to GENERATE ALL/CLEAR ALL - the actions locking actually protects
+# against - so the PADS-grid LOCK toggle was redundant control, not a
+# unique one. Swapped 1-for-1 for a readout "pill": tapping it both
+# selects that pad (key=detail_pad_sel val=<i>) and jumps to DETAIL
+# (goto=1, DETAIL's tab index - see force_shadow.c's parse_shadow_page_
+# conf(), tabs are 0-indexed in file order) in one tap, via
+# force_shadow.c's readout key=/val= SET-before-goto support (added
+# alongside this page revision - see that repo's own DESIGN.md). Same 3
+# widgets/pad as before (PLAY/pill/REROLL), so this needed no MAX_WIDGETS
+# change. Lock state still shows at a glance: the pill's own GET text
+# (daemon.mjs's pad_pill_N) prefixes "L:" when locked.
+#
+# Pill text is necessarily short (abbreviated category, not the full
+# sample name): the pill is only 130px wide (114px usable after the
+# readout's fixed 8px each-side padding), and force_shadow.c's readout
+# text draws at a fixed 14px/char at this widget's scale (FONT_HI_2_0_W,
+# src/font_hi.h) - confirmed against source and a live-preview mockup,
+# not assumed - so roughly 8 characters is the real ceiling, ~6 once the
+# "L:" lock prefix is included. CAT_ABBR below is deliberately terse for
+# exactly this reason. The font itself only has "A-Z0-9.-/>%+:" (space
+# too) - font8x8.h's font_chars - no brackets or bullet glyph, which is
+# why "L:" (not "[L]" or a lock icon) is the prefix.
+CAT_ABBR = {
+    'kick': 'KICK', 'snare': 'SNR', 'rim': 'RIM', 'clap': 'CLAP',
+    'hat': 'HAT', 'closed_hat': 'CHAT', 'open_hat': 'OHAT',
+    'tom': 'TOM', 'conga': 'CNGA', 'percussion': 'PERC',
+    'crash': 'CRSH', 'ride': 'RIDE', 'cymbal': 'CYM', 'fx': 'FX',
+    'glitch': 'GLI', 'vox': 'VOX', 'bass': 'BASS', 'synth': 'SYN',
+    'stab': 'STB', 'chord': 'CHD', 'lead': 'LEAD', 'pad': 'PAD',
+    'other': 'OTH',
+}
+DETAIL_TAB_INDEX = 1   # [tab PADS] is 0, [tab DETAIL] is 1 - file order, see force_shadow.c's parse_shadow_page_conf()
+
 MAX_FRAMES = 20   # force-shadow/src/force_shadow.c's own constant, mirrored here for the assert below
 PADS_ROW_Y = [82, 244, 406, 568]
 PADS_COL_X = [20, 335, 650, 965]
@@ -172,7 +216,7 @@ PADS_CELL_W, PADS_CELL_H = 295, 150
 
 
 def pads_cell(pad_num, pad_index, x, y):
-    # Left half = PLAY, right half = LOCK over REROLL, stacked. PLAY's
+    # Left half = PLAY, right half = pill over REROLL, stacked. PLAY's
     # label is not padded - a padded label bled into the neighbouring
     # pad's column in an earlier draft (checked with the real
     # text_width_1_5() formula this time, not the preview tool's ~50%-
@@ -180,12 +224,13 @@ def pads_cell(pad_num, pad_index, x, y):
     left_cx = x + PADS_CELL_W // 4
     right_cx = x + (PADS_CELL_W * 3) // 4
     mid_cy = y + 92
-    lock_cy = y + 68
+    pill_cy = y + 68
     reroll_cy = y + 118
     return '\n'.join([
         f'frame   x={x} y={y} w={PADS_CELL_W} h={PADS_CELL_H} title="PAD {pad_num}"',
         f'button  cx={left_cx} cy={mid_cy} label="PLAY" key=play_pad_{pad_index} color={ACCENT_HEX}',
-        f'toggle  cx={right_cx} cy={lock_cy} label="LOCK" key=pad_lock_{pad_index}',
+        f'readout cx={right_cx} cy={pill_cy} w=130 h=30 label="" get=pad_pill_{pad_index} '
+        f'key=detail_pad_sel val={pad_index} goto={DETAIL_TAB_INDEX}',
         f'button  cx={right_cx} cy={reroll_cy} label="REROLL" key=reroll_pad_{pad_index}',
     ])
 
@@ -272,7 +317,12 @@ def detail_tab():
     knob_cy = dby + dbh - knob_text_bottom_offset - 12   # 12px bottom margin
     row2_cy = knob_cy
     lines += [
-        f'frame   x={dbx} y={dby} w={dbw} h={dbh} title="PAD DETAIL"',
+        # color_key: force_shadow.c GET-polls detail_pad_color (daemon.mjs)
+        # every refresh cycle and tints this frame's fill to match the
+        # selected pad's category - the shadow-GUI stretch goal from the
+        # pad-colour feature, reusing the same core/pad_colors.mjs palette
+        # the web GUI's colour pickers and the XPM export both already use.
+        f'frame   x={dbx} y={dby} w={dbw} h={dbh} title="PAD DETAIL" color_key=detail_pad_color',
         f'stepper cx={nav_cx} cy={stepper_cy} w=220 h={stepper_h} label="" key=detail_pad_sel '
         f'get=detail_pad_name idx=detail_pad_sel count=detail_pad_count min=0 max=15 numbered=1',
         f'knob    cx={nav_cx} cy={knob_cy} r={knob_r} label="GAIN" key=detail_gain min=0 max=2 pct=50',
