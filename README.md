@@ -74,49 +74,150 @@ reference.
    samples to a destination folder you pick — that's what the Force's own
    Program browser loads.
 
+## Touchscreen GUI (shadow mode)
+
+A second, standalone `ForceKitBuilder` addon renders a full editor page for
+the Force's own touchscreen, via
+[`force-shadow`](https://github.com/sd88me/force-shadow): reach it through
+force-shadow's ADD-ONS launcher (`SHIFT+SCENE-7`, then select Kit Builder)
+rather than a direct `SHIFT+SCENE-N` combo — all seven of those are already
+claimed by other addons on this device. It shares the same working kit and
+preferences as the web UI above (both read/write the same files on disk), so
+generating a kit on the touchscreen and opening the web UI shows the same
+kit, and vice versa.
+
+| Tab | Contents |
+|-----|----------|
+| PADS | A 16-pad performance grid — each pad has its own PLAY, a tap-to-select category "pill" (also jumps to DETAIL for that pad), and REROLL. Pad frames tint live to match each pad's assigned category. |
+| DETAIL | Full per-pad editing for whichever pad you've selected — the 23-category pool matrix, a GAIN knob, lock/clear/reroll/play, pad navigation via a stepper, plus the kit-wide GENERATE ALL, CLEAR ALL, NORMALISE and EXPORT KIT actions. |
+
+Fine-grained work (source/export folder pickers, waveform preview, XPM
+import) stays web-UI-only — a touchscreen has nowhere to put a file-path
+field or a truly free-form editor with any usability, so the two surfaces
+are complementary, not duplicates.
+
+## Audible pad preview
+
+A separate on-demand process, `preview_host`, lets you hear whatever sample
+is currently on a pad — tap that pad's PLAY control on the shadow page (or
+DETAIL's PLAY) — before you ever export. It plays the sample through the
+Force's own audio engine via a shared-memory injection tap, the same
+mechanism Maze Voice, DX7 and JV-880 already use to get audio into the
+Force's mix.
+
+Requires the separate [`ForceAudioJack`](https://github.com/sd88me/force-audio-jack)
+addon to be enabled, and — like every other voice/preview producer in this
+family — a hard rule: **never restart `acvs` while `preview_host` is
+attached.** Unlike those other addons, it's never started via a manual
+POWER toggle on the nodeServer Modules page (`engine_autostart=1` in
+`addon/shadow_page.conf`): force-shadow starts it the moment the Kit
+Builder page becomes active and stops it the moment you leave — the same
+`/moduler` start/stop path the manual toggle uses elsewhere, just called
+automatically for a utility that only does anything while its own page is
+open. It's still never auto-launched at boot. The injected audio is only
+actually audible if the current Force project has an Audio-In track
+routed to it (the same one-time per-project setup those other addons
+already require).
+
+> **Known limitation:** `preview_host` is configured for ForceAudioJack
+> voice slot 3 (`addon/NSMODULE.json`), based on the other voice addons'
+> own slot numbering (0=Maze Voice, 1=JV-880, 2=DX7) — this has not been
+> confirmed live against a real device's `/dev/shm`. Check before relying
+> on it; see DESIGN.md's "Known limitations" section.
+
 ## Requirements
 
-**An existing nodeServer install on the Force.** This is not a standalone
-addon — it's a plugin patched into
-[nodeServer](https://github.com/) (a MockbaMod addon most `force-*` setups
-already run). See DESIGN.md's "Architecture" section for why.
+**An existing nodeServer install on the Force**, for the web-UI plugin —
+this is not itself a standalone addon, it's a plugin patched into
+nodeServer (a bundled MockbaMod addon most `force-*` setups already run).
+See DESIGN.md's "Architecture" section for why.
 
-## Install
+For the touchscreen GUI and audible preview, you additionally need
+`force-shadow` installed (for the shadow page) and, only for preview audio,
+the separate `ForceAudioJack` addon.
+
+## Installation
+
+Three parts, installed in this order. `scripts/deploy.sh` automates all of
+step 1 and 2 over SSH — see its own header for exactly what it does; step 3
+is always a manual, on-device action per the hard rule above.
+
+1. **nodeServer plugin** (the web UI) — patch it into your existing
+   nodeServer install:
+
+   ```sh
+   ./install.sh /media/662522/AddOns/nodeServer/app
+   ```
+
+   (pass the actual path to your nodeServer's `app/` directory; the script
+   will try to auto-detect it via `/dev/shm/.mmPath` if you omit the
+   argument, but that's a convenience, not a guarantee). If nodeServer's
+   `ENDPOINTS.js` doesn't already have a `/kit-builder` route, the script
+   prints the one-line entry to add by hand (also in
+   `plugin/ENDPOINTS.patch.md`).
+
+   Restart nodeServer (kill its `node` process — its own watchdog relaunches
+   it), then open:
+
+   ```
+   http://<force-ip>:8080/kit-builder
+   ```
+
+2. **`ForceKitBuilder` addon** (the touchscreen GUI's always-on backend) —
+   copy `addon/` to `AddOns/ForceKitBuilder` on the device and run:
+
+   ```sh
+   ./manage.sh ENABLE
+   ```
+
+   This just copies its boot-loop launcher and starts `daemon.mjs` — no
+   `LD_PRELOAD`, no `acvs` restart, safe to run unattended.
+
+3. **`preview_host`** (audible preview, optional) — once `ForceAudioJack`
+   is enabled, `preview_host` starts and stops itself automatically as you
+   enter/leave the Kit Builder shadow page (`engine_autostart=1`) — no
+   manual toggle needed. Never auto-launched at boot, and never started as
+   part of steps 1 or 2.
+
+## Building from source
 
 ```sh
-./install.sh /media/662522/AddOns/nodeServer/app
-```
-
-(pass the actual path to your nodeServer's `app/` directory; the script will
-try to auto-detect it via `/dev/shm/.mmPath` if you omit the argument, but
-that's a convenience, not a guarantee). If nodeServer's `ENDPOINTS.js`
-doesn't already have a `/kit-builder` route, the script prints the one-line
-entry to add by hand (also in `plugin/ENDPOINTS.patch.md`).
-
-Restart nodeServer (kill its `node` process — its own watchdog relaunches
-it), then open:
-
-```
-http://<force-ip>:8080/kit-builder
-```
-
-## Development
-
-```sh
-npm test          # node tests/run.js
+npm test                     # node tests/run.js — core/exporter unit tests
+./scripts/build_preview.sh   # cross-compiles addon/host/preview_host for armhf
+                              # (via Docker/QEMU, or natively if CROSS_PREFIX is set)
 ```
 
 No build step for the web UI — `plugin/api/endpoints/kitbuilder/{client.js,
 style.css,template.html}` are served as-is by the endpoint, same as the rest
-of nodeServer's own tools.
+of nodeServer's own tools. `addon/shadow_page.conf` is generated, not
+hand-edited — `python3 tools/gen_shadow_page.py addon/shadow_page.conf`.
 
-## License
+## Project layout
 
-MIT — see [LICENSE](./LICENSE).
+```
+core/           pure ES modules — classification, assignment, loudness, storage
+exporters/      MPC .xpm read/write
+plugin/         nodeServer endpoint + web UI (client.js, style.css, template.html)
+addon/          standalone ForceKitBuilder addon — daemon.mjs, preview_host,
+                shadow_page.conf, manage.sh, NSMODULE.json
+tools/          shadow_page.conf generator
+scripts/        preview_host build (Dockerfile, build_preview.sh) + deploy.sh
+tests/          unit tests (node tests/run.js)
+install.sh      nodeServer plugin installer (runs on the device)
+```
 
-## Credits
+## Related projects & credits
 
 The kit-building engine — sample classification, random assignment, loudness
 matching, and the MPC `.xpm` export — originated in
 [schwung-kit-builder](https://github.com/sd88me/schwung-kit-builder) and was
 ported here to run as a browser UI on the Force.
+
+Built for [MockbaMod](https://github.com/MockbaTheBorg/MockbaMod), and
+depends on [`force-shadow`](https://github.com/sd88me/force-shadow) for the
+touchscreen GUI and, only for audible preview,
+[`force-audio-jack`](https://github.com/sd88me/force-audio-jack).
+
+## License
+
+MIT — see [LICENSE](./LICENSE).

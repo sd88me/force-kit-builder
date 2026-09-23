@@ -1,6 +1,6 @@
 {
   "NAME": "Kit Builder Preview",
-  "DESCRIPTION": "Audible pad preview for Force Kit Builder: route a Force track's MIDI output to this module's virtual port ('KIT BUILDER PREVIEW') and hit pads 1-16 to hear whatever sample is currently on that pad in the working kit, before ever exporting. Requires the separate ForceAudioIn addon to be enabled (arms the shared injection tap at boot, zero voices) - this toggle only starts/stops the preview_host process itself, no LD_PRELOAD/acvs involved. Autoload is deliberately unavailable here: a voice must never be attached before an acvs restart - always start it after boot, from this page. Also requires ForceKitBuilder's own daemon.mjs to be running (it always is, from boot - see manage.sh) - this process only reads pad data through that daemon's control socket, it doesn't touch current-kit.json directly. See DESIGN.md's v3 scoping section.",
+  "DESCRIPTION": "Audible pad preview for Force Kit Builder: tap a pad's PLAY control on the shadow-mode touchscreen page (or the equivalent DETAIL-page control) to hear whatever sample is currently on that pad in the working kit, before ever exporting. No MIDI involved - see the shadow page's own engine_autostart, which starts/stops this process automatically as you enter/leave that page, instead of a manual toggle here. Requires the separate ForceAudioJack addon to be enabled (arms the shared injection tap at boot, zero voices) - this toggle only starts/stops the preview_host process itself, no LD_PRELOAD/acvs involved. Autoload is deliberately unavailable here: a voice must never be attached before an acvs restart, so it never starts at boot. Also requires ForceKitBuilder's own daemon.mjs to be running (it always is, from boot - see manage.sh) - this process only reads pad data through that daemon's control socket, it doesn't touch current-kit.json directly. See DESIGN.md's v3 scoping section.",
   "PROCESSNAME": "preview_host",
   "DIRNAME": "ForceKitBuilder",
   "FILENAME": "preview_host",
@@ -10,6 +10,6 @@
     { "NAME": "ctrl-sock flag", "VALUE": "--ctrl-sock" },
     { "NAME": "Kit Builder daemon's control socket path", "VALUE": "/tmp/kitbuilder_ctrl.sock" },
     { "NAME": "mix-slot flag", "VALUE": "--mix-slot" },
-    { "NAME": "ForceAudioIn voice slot (0-3; needs live confirmation - 0=Maze Voice, 1=JV-880, 2=DX7 per their own NSMODULE.json comments, 3 appears free but wasn't checked against the real device's /dev/shm - see DESIGN.md's v3 open items)", "VALUE": "3" }
+    { "NAME": "ForceAudioJack voice slot (0-3; needs live confirmation - 0=Maze Voice, 1=JV-880, 2=DX7 per their own NSMODULE.json comments, 3 appears free but wasn't checked against the real device's /dev/shm - see DESIGN.md's v3 open items)", "VALUE": "3" }
   ]
 }

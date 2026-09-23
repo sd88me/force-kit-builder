@@ -46,6 +46,13 @@ family links into, that seemed like the right call rather than a cost — but
 it's a genuine coupling, not a free lunch, and it's worth knowing if you're
 setting this up on a Force that doesn't already run nodeServer.
 
+**A second, separate piece exists alongside this plugin**: a standalone
+`ForceKitBuilder` MockbaMod addon (`addon/`) that renders a touchscreen
+"shadow mode" GUI and hosts an audible pad-preview process. It's a real
+addon with its own `manage.sh`/`NSMODULE.json`, not another patch into
+nodeServer — see "Shadow-GUI addon and preview_host" below for how it fits
+alongside the plugin described in this section.
+
 ## Distribution model
 
 This repo is not itself something you drop into `AddOns/`. It's a patch you
@@ -496,1182 +503,142 @@ afterward via `NEW_KIT` so the device wasn't left mid-test.
   out to be a real workflow people want (e.g. importing just a few pads from
   a factory kit into a kit already in progress).
 
-## v2 scoping: standalone on-device addon with a shadow GUI (not yet built)
-
-"Any hardware-button/on-device-GUI control path at all" was explicitly out
-of scope for the version above. This section scopes reversing that — a real
-MockbaMod addon (`ForceKitBuilder`) that renders a touchscreen page via
-`force-shadow`, **alongside** the existing nodeServer web plugin, not
-replacing it. Decided 2026-09-21, not yet implemented — this is the plan to
-pick up when building it, same role as force-shadow's own old "RESUME HERE"
-section played before that project shipped.
-
-### Why alongside, not instead
-
-The web plugin stays the full-detail surface: source-folder/export-folder
-pickers (via nodeServer's `/file-browser/LIST`), per-pad pool
-reassignment, category tuning, waveform preview, XPM import. A touchscreen
-page has nowhere to put a file-path text field or a fine-grained pool
-editor with any real usability — trying to cram that in would make the
-shadow page worse at its job (fast, physical, no-laptop-needed kit
-iteration) without actually replacing the web UI's, so both stay.
-
-### Key finding: they already share state for free
-
-`core/storage.mjs` is the **only** thing that reads/writes
-`current-kit.json` and `preferences.json` under `KB_DIR`. The nodeServer
-plugin doesn't own that state — it just calls into `storage.mjs` like any
-other caller. That means a new on-device daemon that also imports
-`core/storage.mjs` (and `kit_model.mjs`, `random_assign.mjs`,
-`sample_classifier.mjs`, `exporters/mpc_xpm.mjs` — the same modules the
-plugin already uses, unmodified, straight from this repo) is *automatically*
-looking at the same working kit and the same source/export-folder prefs the
-web UI set — no new sync mechanism to design or maintain. Generate a kit on
-the touchscreen, open the web UI, see the same kit; either surface's
-`EXPORT` writes the same `current-kit.json` the other would read next.
-
-This is also the direct answer to "can they both share the same core code
-so I don't have to maintain both": yes, literally the same `core/` and
-`exporters/` directories, imported by two different front ends. Nothing
-about the core layer is nodeServer-specific already (see the "Architecture"
-section above — it's plain ES modules with no browser/HTTP assumptions
-baked in), which is exactly what makes this cheap.
-
-### Architecture
-
-New addon folder, `AddOns/ForceKitBuilder/`, alongside this repo's existing
-`core/`/`exporters/` (deployed either as a git submodule-style copy at
-install time, or a relative import if colocated — decide at build time, not
-a design blocker):
-
-- `manage.sh`, `run_forcekitbuilder.sh` — standard MockbaMod addon
-  contract (`references/architecture.md` in the `mockbamod-module-creator`
-  skill has the exact shape).
-- `host/daemon.mjs` — a small Node process (Node's already on-device via
-  the nodeServer AddOn) that:
-  - Listens on a Unix control socket at `/tmp/kitbuilder_ctrl.sock`
-    (matches the `/tmp/<addon>_ctrl.sock` convention `force-dx7`/
-    `force-maze` already use), speaking the plain
-    `SET <key> <value>\n -> OK\n|ERR\n` / `GET <key>\n -> <value>\n`
-    protocol every other shadow-GUI-backed addon uses (confirmed identical
-    across addons per `force-shadow/docs/adding-a-page.md`).
-  - Imports `core/storage.mjs`, `core/kit_model.mjs`,
-    `core/random_assign.mjs`, `core/sample_classifier.mjs`,
-    `exporters/mpc_xpm.mjs` directly — the daemon is a thin protocol
-    adapter, not a reimplementation. Same division of labour as
-    `plugin/api/endpoints/kitbuilder/index.js`, just a Unix-socket
-    frontend instead of an HTTP one.
-  - **No `engine_process_name` block in `shadow_page.conf`** — Kit Builder
-    isn't a continuous DSP engine with an audio on/off state, so there's no
-    on/off button to draw. The daemon can just run at boot like any other
-    lightweight background addon (idle until a `SET`/`GET` arrives, no
-    meaningful resource cost).
-  - Source/export folders: **read-only from the daemon's side** — it reads
-    whatever `preferences.json` already holds (set via the web UI's
-    pickers), not its own copy. If nothing's configured yet,
-    `GET status` should say so plainly rather than silently no-op, so the
-    touchscreen page can show a "set source/export folders in the web UI
-    first" message instead of a confusing empty grid.
-
-### Control protocol (v1 — core loop only)
-
-| key | direction | meaning |
-|---|---|---|
-| `pads` | GET | JSON array of 16 `{label, name}` — `label` = sample filename (or "empty"), `name` = category, for the pad-grid `list` widget |
-| `pad_sel` | GET/SET | currently selected pad index (0-15); `SET` both selects *and* is what the `list` widget's tap sends |
-| `pad_info` | GET | one-line text for the selected pad (full sample name + category + source pool) — feeds a `readout` |
-| `pad_lock` | GET/SET | lock state (0/1) of the selected pad — `bits`/`toggle` widget |
-| `generate` | SET | regenerate all unlocked pads (calls `random_assign`'s existing logic, same as the web UI's `ASSIGN` action) |
-| `reassign_pad` | SET | reassign just the selected pad, respecting its lock state (should be a no-op / `ERR` if locked) |
-| `export` | SET | write the current kit to the configured export folder (same `exportMpcXpm()` call the web `EXPORT` action makes) |
-| `status` | GET | last operation's result message, or a "not configured yet" notice — feeds a `readout` |
-
-### Shadow page layout (single tab, v1)
-
-The `list` widget's `cols=`/`rows=` grid is a direct fit for the 16-pad
-layout — no need for 16 separate widgets. Modeled on `force-dx7`'s
-existing two-`list` page (`force-dx7/addon/shadow_page.conf:238-240`) as
-the closest real precedent for "tappable grid + detail readout":
-
-```
-[tab Kit]
-frame   x=36 y=36 w=724 h=900 title="PADS"
-list    x=52 y=88 w=692 h=848 key=pad_sel items=pads sel=pad_sel \
-        cols=4 rows=4 th=150 gap=12 jump=0 colmajor=0 numbered=1 scale=2
-frame   x=776 y=36 w=468 h=900 title="SELECTED PAD"
-readout x=792 y=88 w=436 h=120 label="" get=pad_info
-toggle  cx=850 cy=260 label="Lock" key=pad_lock
-button  cx=850 cy=340 label="Reassign" key=reassign_pad
-button  cx=850 cy=460 label="Generate All" key=generate
-button  cx=850 cy=580 label="Export Kit" key=export
-readout x=792 y=680 w=436 h=180 label="" get=status
-```
-
-Coordinates are a first pass, not measured against a real render — verify
-with `force-shadow`'s offline PPM/PNG harness (`force-device-workflow`
-skill) before touching the device, same as every other page in this
-family.
-
-### Open items — resolved, v1 implemented (2026-09-21)
-
-- [x] **`KB_DIR` resolution**: confirmed by reading `sample_index.mjs` —
-      `KB_DIR` has no `__dirname` dependency, it's whatever
-      `configureDataDir()` was last called with. The daemon calls it with
-      the exact same path nodeServer's plugin does
-      (`<mmPath>/AddOns/nodeServer/app/kitbuilder-core/data`), so both
-      processes share one data directory automatically.
-- [x] **How `core`/`exporters` get onto the device**: resolved by *not*
-      copying them at all — the daemon imports directly from nodeServer's
-      already-installed `kitbuilder-core/`
-      (`addon/host/daemon.mjs`'s `resolveNodeServerAppDir()`). One copy on
-      disk, imported by two processes; the version-skew risk the open item
-      worried about doesn't exist because there's nothing to skew. Real
-      cost: Kit Builder's shadow GUI now hard-depends on the FORCE-APPS-
-      SERVER-MOCKBA fork's Kit Builder being installed first, on top of
-      the nodeServer dependency the "Architecture" section above already
-      accepted.
-- [x] **Locked-pad `reassign_pad`**: `core/random_assign.mjs`'s
-      `rerollPad()` already returns `{changed:false, warning:'pad is
-      locked'}` rather than throwing — the daemon replies `OK <warning
-      text>`, not `ERR`, and surfaces it via the `status` readout. Verified
-      in the offline socket test below.
-- [x] **Boot-loop entry shape**: plain background process, standard
-      `manage.sh`/`run_forcekitbuilder.sh` contract per
-      `references/architecture.md` — no LD_PRELOAD, no `acvs` restart, no
-      `NSMODULE.json`/Modules Manager entry (there's no on/off engine
-      state to manage). `run_forcekitbuilder.sh`'s `kill` handler greps the
-      process list for `daemon.mjs` specifically rather than `killall
-      node`, which would also take down nodeServer itself.
-- [ ] **Offline visual render before ever touching the device**: turned
-      out to be a false assumption in the original scoping —
-      `force-shadow/tools/render_preview.c` is hardcoded to Maze Voice's
-      own page, not a generic `.conf` renderer, so there is currently no
-      way to actually see this layout rendered without either extending
-      that tool or looking at the real device. The coordinates below are
-      hand-checked against the real 1280x800 landscape canvas
-      (`LAND_W`/`LAND_H` in that file) so nothing overflows the bounds,
-      but exact spacing/overlap is unverified until a real look — first
-      `SHIFT+SCENE-1` on the device should be treated as the actual layout
-      review, not a formality.
-
-### v1 implementation notes
-
-- `addon/host/daemon.mjs` re-reads `current-kit.json` from disk on every
-  request (`syncKit()`), not just at startup — the web plugin and this
-  daemon each hold their own in-memory copy, so without this the shadow
-  page could show a stale kit after the web UI generates/edits one.
-  `index`/prefs are *not* re-synced per-request (only via `RESCAN`/export
-  from the web UI, infrequent enough that startup-load is an acceptable v1
-  limitation — revisit if that assumption turns out wrong in practice).
-- **No persisted export destination existed before this** — the web UI's
-  `EXPORT` action took `destDir` fresh on every call, nothing saved to
-  `preferences.json`. Added `last_export_dir` to `loadPrefs()`/
-  `savePrefs()` (`core/storage.mjs`) plus a `persistPrefs()` helper in the
-  nodeServer endpoint that always threads it through — `savePrefs()`
-  replaces the whole file each call, so any call site that forgot to pass
-  it would have silently erased a previously-saved value; there's now
-  exactly one call site to get that right instead of several. The daemon
-  reads this value but never writes it — no folder picker on a
-  touchscreen, so "export once from the web UI to set the destination,
-  then the shadow page can re-export there" is the intended flow.
-- Verified offline end-to-end in Docker (`node:20-slim`, no device
-  needed) before writing a line of `shadow_page.conf`: a fake `mmPath`
-  tree with synthetic WAV fixtures and a hand-built sample index, the
-  daemon started for real, a raw socket client scripted through
-  `GET pads` → `SET generate` (hit the real "duplicates allowed" warning
-  path) → lock → `SET reassign_pad` on both a locked and unlocked pad →
-  `SET export` (both the "no dir configured" `ERR` path and, with
-  `preferences.json` seeded, a real `.xpm` + `MANIFEST.txt` + gathered
-  WAVs written to disk and confirmed present). This is what caught the
-  `h=900` frame overflowing the 800px canvas height in the first
-  `shadow_page.conf` draft, and confirmed the locked-pad path replies
-  `OK`, not `ERR`, as designed.
-- Full `tests/run.js` suite (104 cases after adding `last_export_dir`
-  coverage) still passes — `docker run --rm -v $(pwd):/app -w /app
-  node:20-slim node tests/run.js`.
-
-### Still not done
-
-- Not yet deployed to or tested on the real device — SSH access to a
-  MockbaMod Force wasn't available in the environment this was built in.
-  Deploy via the usual staged-copy pattern
-  (`force-device-workflow` skill), enable via `manage.sh ENABLE`, then
-  work through the verification checklist in
-  `mockbamod-module-creator`'s `references/architecture.md` (process
-  runs, survives a real reboot, etc.) before trusting it live.
-- No favourite/reject controls on the shadow page (v1 is intentionally
-  core-loop-only, per the original scoping decision) — `core/storage.mjs`'s
-  `last_export_dir` plumbing was written generically enough that adding
-  more prefs fields later doesn't need another `persistPrefs()`-style
-  refactor.
-- ~~`render_preview.c` only covers Maze Voice~~ — resolved upstream:
-  `force-shadow/tools/render_conf_preview.c` is now a real generic
-  `.conf` preview tool (`style=td3`/`theme_*` aware, every widget kind).
-  Used below to render `shadow_page.conf` after applying the `td3` theme
-  and catching a font-safety bug — see "v2 refinements" below.
-
-## v2 refinements: td3 theme, font-safety (2026-09-22)
-
-Applied `mockbamod-module-creator`'s new default-theme guidance
-(`style=td3`, `force-acid`'s own palette copied verbatim) and rendered
-with `force-shadow/tools/render_conf_preview` before touching anything
-live:
-
-- **Real bug caught by the render**: every button/toggle label
-  (`Lock`, `Reassign`, `Generate All`, `Export Kit`) was mixed-case.
-  `force-shadow`'s baked font (`src/font8x8.h`) only has glyphs for
-  space, `A-Z` (uppercase only), `0-9`, and `. - / > % + :` — anything
-  else silently renders as a blank gap, not an error. Fixed the static
-  labels in `shadow_page.conf` to all-caps, and added a
-  `shadowFontSafe()` sanitizer in `daemon.mjs` for every *dynamic*
-  string sent over the control socket (`pad_info`, pad labels, `status`)
-  — real sample filenames like `Moombahton-Kick-MB Kick 14.WAV` have
-  lowercase letters that would otherwise vanish. `pads`'s JSON payload
-  is sanitized per-field inside `padsJson()`/`padLabel()`, not as a
-  blanket string filter, since blanket-filtering would corrupt the JSON
-  syntax itself (braces/quotes/commas aren't in the allowed charset).
-- The render tool's `list` widget always shows its own hardcoded
-  `force-webstream` fixture data (`"01 YOUTUB"`, `"03 SOUNDC"`, …) —
-  it has no live daemon to query `GET pads` from, so this is expected,
-  not a bug; the real device will show the 16 real pads.
-- A small black box + garbled text renders top-left, unrelated to
-  anything in this `.conf` — confirmed by swapping `display_name` to
-  distinct test text and re-rendering: the artifact didn't move or
-  change. **Correction (see "Per-pad control redesign" below): this was
-  wrong.** It was one of this page's own `readout` widgets, drawn near
-  `(0,0)` and clipped by the canvas edge, because `readout` takes
-  `cx=`/`cy=` (center point) and this draft used `x=`/`y=` (top-left) —
-  swapping the *label* didn't move it because the bug wasn't in the
-  label, it was in the coordinates. Confirmed by checking
-  `force-shadow/src/force_shadow.c`'s real parser, not just the preview
-  tool's copy of the same logic, and confirmed gone once every `readout`
-  in this file was fixed to `cx=`/`cy=`.
-
-## Per-pad control redesign + Akai OS-style theme (2026-09-22)
-
-Reworked per this project's own direction: bigger pads, each pad's own
-LOCK/REROLL/CLEAR controls directly on the pad instead of a shared
-"selected pad" side panel + tap-to-select grid, a GLOBAL tab for
-kit-wide actions (GENERATE ALL, CLEAR ALL, NORMALISE, EXPORT KIT), and a
-dark/cyan colour scheme approximating the Akai Force's own OS look
-rather than `force-acid`'s yellow `td3` palette (kept `style=td3`'s
-proven widget *shapes* — rounded frames, pill buttons — only the
-`theme_*` colour values changed). **No verified reference for the real
-Force OS's exact colours exists in this repo family yet** — these hex
-values are a reasonable starting approximation (dark charcoal panels,
-cyan selection/accent, neutral grey buttons), not confirmed-correct;
-compare against the real hardware and adjust once possible.
-
-### Why two pad tabs, not one
-
-16 pads × (frame + readout + toggle + 2 buttons) = 80 widgets — over the
-format's 64-widgets-per-tab cap (`docs/adding-a-page.md`: "up to 8 tabs,
-64 widgets per tab"). Split into "PADS 1-8" / "PADS 9-16" (8 × 5 = 40
-widgets each, comfortable headroom) plus a separate "GLOBAL" tab for the
-kit-wide actions. This also delivers the "bigger pads" ask directly —
-each pad now gets a full ~610×150 cell (2 columns × 4 rows) instead of a
-~140px grid tile, room to show the complete sample filename instead of a
-truncated one.
-
-### Protocol redesign: per-pad-indexed keys, no shared selection state
-
-v1's protocol had one `pad_sel` + `pad_info`/`pad_lock` triple driving a
-tap-to-select `list` widget. Since every pad now has its own controls
-directly, there's no "currently selected pad" concept left — replaced
-with per-pad-indexed keys instead: `pad_info_N`, `pad_lock_N` (GET/SET),
-`reroll_pad_N` (SET), `clear_pad_N` (SET), `pad_path_N` (GET, raw, for
-the future C++ preview producer — see v3 below), for `N` in `0..15`.
-`daemon.mjs` matches these with one regex
-(`/^(pad_info|pad_lock|pad_path|reroll_pad|clear_pad)_(\d+)$/`) rather
-than 80 individual `switch` cases. Also added: `clear_all` (SET, wraps
-`core/kit_model.mjs`'s existing `clearUnlocked()`) and `normalize` (SET,
-ports the web plugin's existing `MATCH_LEVELS` action — same
-`core/loudness.mjs` `matchGains()` + `core/wav_rms.mjs` call, just
-daemon-side instead of nodeServer-side. Both already-proven core
-functions, not new logic).
-
-### Real bug the render caught: `readout`'s `cx`/`cy`, not `x`/`y`
-
-Confirmed against `force-shadow/src/force_shadow.c`'s real conf parser
-(not just the preview tool's copy of the same logic, though both agree):
-`frame` and `list` read their own `x=`/`y=` keys (top-left corner).
-**Every other widget kind — `readout`, `toggle`, `button`, `knob`,
-`stepper`, `enum_h`/`enum_v` — reads `cx=`/`cy=` (center point)
-instead.** The first draft of this redesign used `x=`/`y=` on every
-`readout` line, matching the mental model from `frame`/`list` just above
-them in the same file. This doesn't error — it silently computes
-`x0 = 0 - w/2`, `y0 = 0 - h/2` (since `cx`/`cy` default to 0 when absent)
-and draws mostly off-canvas, with just a clipped corner visible. This is
-exactly the artifact wrongly blamed on the preview tool in "v2
-refinements" above. Fixed by regenerating every `readout` line with the
-correct center-point math.
-
-### Generated, not hand-written
-
-16 near-identical pad blocks is exactly the kind of thing hand-editing
-gets subtly wrong (this file's own history is the proof). `shadow_page.conf`
-is now generated by `tools/gen_shadow_page.py` — edit the script and
-regenerate (`python3 tools/gen_shadow_page.py addon/shadow_page.conf`)
-rather than hand-editing the pad blocks directly.
-
-### Colour: cyan → orange (2026-09-22, same day)
-
-`theme_accent`/`theme_accent_hi`/`theme_seg_active` changed from cyan
-(`00b8d4`/`4dd0e1`) to orange (`ff8f00`/`ffb74d`) — the rest of the
-Akai-OS-approximation palette (dark charcoal panels/buttons) is
-unchanged. Also made `padInfoText()` always prefix the pad number
-(`daemon.mjs`) rather than relying solely on each pad's frame title to
-show it — needed for the one-tab layout explored next, harmless
-alongside the frame title in the layout that's actually in use.
-
-### Explored and rejected: all 16 pads on one tab
-
-Asked whether 16 pads could fit on a single tab instead of two.
-Technically yes — `readout + toggle + 2 buttons` × 16 = exactly 64
-widgets, the format's own per-tab cap, with a 4-column × 4-row grid and
-no per-pad `frame` (no widget budget left for one). Built as
-`tools/gen_shadow_page.py --one-page` and rendered to check before
-deciding either way, not just estimated from the numbers. The render
-showed a real, not just aesthetic, regression: button pills auto-size to
-their label text (`render_conf_preview.c`'s `widget_button`), and at
-this cell width **REROLL's pill overlaps CLEAR's and gets visually
-clipped to "REROL"** — a genuine touch-target/legibility problem on
-hardware where tap accuracy is the whole point, not a style preference.
-Compared side-by-side, kept the two-tab layout (8 pads/tab). The
-`--one-page` generator path is kept in the script since the comparison
-render is what settled this, not a guess — worth being able to
-regenerate and re-check if the per-pad control count ever shrinks enough
-to make it viable again.
-
-### Status readout moved to the top bar (2026-09-22, same day)
-
-Was a large box at the bottom of just the GLOBAL tab; moved to the top
-bar (`cy=36`, inside `TOPBAR_H`'s 72px) instead, repeated on every tab -
-same pattern `force-dx7/addon/shadow_page.conf` already uses for its
-bank-name readout. Two real findings behind this, not just taste:
-
-- We have no `engine_process_name` block, so on the *real* device (not
-  the preview tool, which always draws its own placeholder pill
-  regardless of the `.conf`) the whole top-right of the bar is empty -
-  free real estate, not a space we'd be fighting the renderer for.
-- Putting status only on GLOBAL meant switching tabs to see it. On the
-  top bar it's visible from any pad tab too - e.g. "Pad 3 reassigned"
-  shows immediately without leaving the pads you're working on.
-
-Freed the bottom of GLOBAL up for the four action buttons to use the
-full tab height instead of being packed into the top half.
-
-### Pools, categories, buckets — asked to clarify, already distinct
-
-`core/sample_index.mjs`'s `ROLE_ORDER` (23 raw classification
-categories: `kick`, `snare`, `hat`, `crash`, `vox`, `synth`, …) is not
-the same thing as `SYSTEM_BUCKETS` (8: Kick/Snr/Clap/Hats/Tom/Perc/Cym/
-FX) — buckets are a **display-only** grouping for the web UI's sample-
-count summary panel, not currently wired to pool assignment at all. A
-pad's actual **pool** (`pad_layout` config entry, written by the web
-UI's `SET_POOL` action / `core/storage.mjs`'s `savePadLayoutEntry()`) is
-an array of 1+ raw *categories*, config-wide (not per-kit) — see
-`DEFAULT_PAD_LAYOUT` in `core/kit_model.mjs` for the 16 defaults.
-
-Asked whether pool selectors could fit on the shadow page: not cleanly.
-23 categories is well over `enum_h`/`enum_v`'s 6-option cap, there's no
-multi-select widget in the format at all (a pool is a *set* of
-categories, not one pick), and repurposing the 8 display buckets for
-this would still be 2 over the cap and would change what "pool" means
-(restricting each pad to one bucket rather than a free category
-combination) — a real product decision, not made here. Left as web-UI-
-only, per the original "Why alongside, not instead" reasoning above; not
-revisited further without a decision on that tradeoff.
-
-### Verified before deploying
-
-- All three tabs rendered with `force-shadow/tools/render_conf_preview`
-  and eyeballed — correct dark charcoal / orange theme, all labels
-  legible (uppercase, font-safe), `readout` text visible in the right
-  place, no stray
-  artifacts.
-- `daemon.mjs` re-tested end-to-end offline (Docker, synthetic WAV
-  fixtures, same harness as v1): `pad_info_N`/`pad_lock_N` per-pad,
-  `reroll_pad_N` on both a locked pad (correctly refuses, `OK` not `ERR`)
-  and one that happens to re-pick its existing sample (a real, distinct
-  case from "locked" — the status message used to wrongly imply
-  "locked?" for this case too; fixed to say "same sample re-picked"),
-  `clear_pad_N` (respects lock, refuses on a locked pad same as reroll),
-  `clear_all` (respects locks, only clears unlocked pads), `normalize`
-  (runs with and without samples present).
-- Full `tests/run.js` suite (104 cases, unaffected — this redesign didn't
-  touch `core/`) still passes.
-- **Not yet deployed to or re-tested on the real device** — same
-  limitation as v1's own "Still not done": no SSH access to a MockbaMod
-  Force in this environment while this was built. Re-run the same
-  deploy/verify checklist before trusting it live, since the whole
-  protocol changed, not just cosmetics.
-
-## v3 scoping: audible sample preview via note keys (not yet built)
-
-Asked 2026-09-22: can pads be previewed audibly, ideally by hitting the
-Force's own physical pads (notes 36-51, matching `PAD_MIDI_NOTES`) like a
-normal drum kit, before ever exporting? Answer: yes — this reuses
-`force-audioin`'s existing shared-memory-ring injection mechanism rather
-than inventing new `LD_PRELOAD` code, the same way every other
-sample-triggered voice in this family (Maze Voice, DX7, JV-880) already
-gets audio into the Force's mix. Not yet implemented; this is the plan to
-build from, in the same spirit as the v2 addon's own scoping section
-above.
-
-### Why a separate process, not the existing daemon
-
-`force-audioin/DESIGN.md`'s "Building a new voice producer" section is
-explicit: **a producer must be started only via its own
-`NSMODULE.json`/Modules Manager entry — never from an addon's own boot
-script — and never while `acvs` is about to restart** (the same hard rule
-`force-device-workflow` already enforces for `force-audioin`/Maze). The
-existing `addon/host/daemon.mjs` is deliberately always-on from boot
-(no continuous-engine state to manage, per the v2 scoping) — bolting
-audio production onto it would violate that rule the moment someone
-restarts `acvs` with a preview mid-hit. So this is a **second, separate
-process** (`addon/host/preview` — name pending), gated behind the
-Modules Manager like `dx7_host`/`maze_host` are, `AUTOLAUNCHABLE: false`.
-
-### Why native C++, not Node
-
-Every existing producer (`injectTone.c`, `maze_host.cpp`, `dx7_host.cpp`)
-is a native C/C++ binary using `shm_open`/`mmap` directly against
-`ai_shm_t`'s exact struct layout (`force-audioin/src/forceAudioInject.h`),
-including a hand-rolled SPSC ring with specific acquire/release memory-
-ordering semantics on the `head`/`tail` fields. Node has no built-in POSIX
-shared-memory/mmap binding, and this device has no working path to add
-one (no npm registry access, no on-device compiler for a native addon —
-see `mockbamod-module-creator` skill's cross-compile-via-Docker+QEMU
-convention every native piece in this family already uses). Matching
-existing precedent exactly — vendor `forceAudioInject.h` byte-for-byte,
-write a small C++ binary, cross-compile the same way `force-shadow`'s
-`.so` and `force-dx7`'s `dx7_host` already do — is both lower-risk and
-less new surface area than trying to be the first Node producer in this
-family.
-
-### MIDI input: reuse the family's own established pattern, don't invent one
-
-`force-maze/maze-voice/src/maze_host.cpp` already solves "receive note
-input from a Force pad/track" — `RtMidiIn::openVirtualPort("In (Mockba)")`
-+ `setCallback()`, vendored `rtmidi/RtMidi.h` (already present in this
-family's other repos, e.g. `force-maze/maze-voice/src/rtmidi/`). This is
-the standard MPC workflow: the user routes a track's MIDI output to the
-new virtual port ("KIT BUILDER PREVIEW" or similar) the same way they'd
-route to any external instrument — physically hitting that track's pads
-then sends real note-on messages (0x90, note, velocity) to our producer.
-**This is not a passive tap of raw physical pad hits** — nothing in this
-family intercepts those directly; every existing voice addon works this
-same routed-track way, so this isn't a new UX pattern for anyone already
-using Maze Voice or DX7 on this device.
-
-### Producer flow (v1: monophonic, last-note-wins)
-
-1. `RtMidiIn` callback receives `0x90 <note> <velocity>`. Ignore anything
-   outside `36..51` (matches `PAD_MIDI_NOTES`) and any note-off (`0x80`,
-   or `0x90` with velocity 0).
-2. `note - 36` = pad index. Open a short-lived connection to the
-   *existing* `/tmp/kitbuilder_ctrl.sock` and ask for that pad's real
-   file path — needs one new daemon protocol key (see below) rather than
-   the C++ producer re-reading/parsing `current-kit.json` itself
-   (`daemon.mjs` already owns that state correctly, including the
-   per-request `syncKit()` freshness fix from v2 — no reason to duplicate
-   that logic in C++).
-3. Decode the WAV (from-scratch parse, same spirit as
-   `core/wav_info.mjs`/`core/wav_peaks.mjs` but in C++ — 16-bit PCM
-   mono/stereo covers the real sample library based on what's already
-   been seen live: `Moombahton-Kick-MB Kick 14.WAV` etc.). Convert to
-   interleaved float32 at a fixed declared rate — 44100 stereo is the
-   simplest choice and matches `AI_MAX_CH`.
-4. Write into `/forceAudioInject3` (see slot accounting below) — resets
-   `head`/writes fresh samples on every note-on, so a fast re-hit cuts
-   off whatever was still playing rather than layering (true polyphony —
-   mixing multiple concurrently-playing pad hits in software before one
-   ring write — is a real v2 extension, not v1; flagging so "why does a
-   fast roll cut itself off" doesn't look like a bug later).
-5. `enabled=1`, `gain` fixed at `1.0` for v1 (no per-pad level control
-   yet — `playback.gain` already exists on the kit's own pad data model
-   for the *exported* XPM; wiring that same value into the preview's
-   `gain` field is an obvious v2 tie-in, not done here).
-
-### Daemon protocol key: already exists
-
-Originally scoped as a new `GET pad_path` needing a `SET pad_sel`
-selection step first — moot now. The "per-pad control redesign" below
-replaced the shared-selection protocol with per-pad-indexed keys
-(`pad_info_N`, `pad_lock_N`, …), and added `GET pad_path_N` (raw, **not**
-run through `shadowFontSafe()` — that sanitizer is display-only and would
-corrupt a real filesystem path) as one of them — returns pad `N`'s
-`sample.filesystem_path`, empty string if the pad has no sample. The C++
-producer just does `GET pad_path_<note-36>` directly, no selection step
-at all — simpler than what this section originally scoped.
-
-### Ring slot: 3 (needs live confirmation)
-
-Confirmed by grepping sibling repos' own source comments (not
-guessed): `force-dx7/src/dx7_host.cpp`'s own comment states the
-existing assignment — `0 = Maze Voice, 1 = JV-880, 2 = DX7`. Slot `3` is
-the last of `AI_MAX_VOICES` (4) and appears unclaimed by anything in this
-device's addon family as of this scoping — **but this device was
-unreachable when writing this** (`ssh: connect to host 192.168.1.187
-port 22: No route to host`, 2026-09-22), so confirm live
-(`ls /dev/shm/forceAudioInject*` and cross-check every installed voice
-addon's own `NSMODULE.json` `--mix-slot` argument) before building
-against slot 3, the same way the v2 addon's `page=1` assumption turned
-out wrong until checked against the real device.
-
-### Real UX dependency, not a shortcut around it
-
-Injected audio lands on `MPC`'s *capture* path — same as every other
-voice in this family — so it's only actually audible if the current
-Force project has an Audio-In track listening to it, same one-time
-per-project setup Maze Voice/DX7 users already do. Not a new burden this
-project introduces, just worth stating plainly rather than implying
-"hit a pad, hear it" is fully automatic with zero project-side setup.
-
-### Built (2026-09-22) — everything except real MIDI hardware I/O
-
-- [x] **Folder shape**: `addon/host/preview_host.cpp`, alongside
-      `daemon.mjs`, matching how DX7 keeps `dx7_host` and its other
-      surfaces in one addon folder — decided rather than left open.
-      `addon/host/rtmidi/` (vendored `RtMidi.h`/`.cpp`, copied from
-      `force-dx7/src/rtmidi/`) and `addon/host/forceAudioInject.h`
-      (vendored from `force-audioin`, byte-for-byte — noted in its own
-      header that `force-dx7`'s vendored copy has since drifted out of
-      date against the canonical, not this repo's problem to fix).
-- [x] **`NSMODULE.json`**: written, `--ctrl-sock`/`--mix-slot` arguments,
-      `AUTOLAUNCHABLE: false` per `force-audioin`'s hard rule.
-- [x] **Build**: `scripts/Dockerfile` + `scripts/build_preview.sh`, exact
-      recipe copied from `force-dx7/scripts/` (Debian bookworm, not the
-      older `stretch` base — this Force's real ceiling is glibc 2.39 per
-      that Dockerfile's own comment). Compiles clean to a real armhf
-      binary (`ELF 32-bit LSB pie executable, ARM, EABI5`), zero warnings.
-- [x] **WAV decode coverage**: from-scratch RIFF/WAVE parser (no existing
-      precedent to port — `dx7_host.cpp`/`maze_host.cpp` are pure
-      synthesis, neither reads sample files), verified via a
-      `--test-decode <path>` self-test mode against synthetic fixtures
-      covering every format claimed: 8/16/24/32-bit PCM, 32-bit float,
-      mono and stereo, plus a 22050Hz file to check the resampler. All
-      produced correct frame counts and plausible sample values (checked
-      by hand against the known sine-wave fixture, not just "didn't
-      crash"). Edge cases mirroring `tests/test_wav_info.js`'s coverage —
-      truncated file, garbage/non-RIFF input, no `data` chunk — all fail
-      cleanly (`DECODE_FAILED`, exit 1), no crash.
-- [x] **Full pipeline, minus the actual MIDI event**: a `--test-full`
-      self-test mode calls exactly what `on_midi_cb()` calls (ctrl-socket
-      lookup → decode → resample → real ring write) directly. Bridged a
-      real `daemon.mjs` (x86 Docker, the same offline-fixture harness v1/
-      v2 used) with the real armhf `preview_host` binary (Docker + QEMU)
-      over a shared bind-mounted `/tmp` so they could talk over the real
-      Unix socket across two different container architectures — confirmed
-      `GET pad_path_0` returns empty on an unassigned pad, then a real
-      path after `SET generate`, then confirmed the full pipeline writes
-      to a genuine `/forceAudioInject3` shared-memory segment (524344
-      bytes — exactly `sizeof(ai_shm_t)` for `AI_RING_FRAMES=65536`
-      frames × `AI_MAX_CH=2`, not a guessed number).
-
-### Not tested — genuinely can't be, without the real device
-
-- **Ring slot 3 is still not live-confirmed.** Same caveat as when this
-  was first scoped — no SSH access to the device while this was built.
-  `ls /dev/shm/forceAudioInject*` and cross-checking every installed
-  voice addon's `NSMODULE.json` `--mix-slot` before trusting slot 3
-  remains the first real step on-device, before even installing this.
-- **Whether the injected audio is actually audible** depends on the
-  current Force project having an Audio-In track routed to it (see
-  "Real UX dependency, not a shortcut around it" above) — that's a
-  device/project-state check, not something any of this offline testing
-  could exercise.
-
-## v3 revision: touchscreen PLAY button, not MIDI (2026-09-22, same day)
-
-Asked directly: does the RtMidi virtual port need track routing set up
-every time, or does it passively see whatever's already playing? Answer
-was routing, always — `RtMidiIn::openVirtualPort()` registers a real,
-separate ALSA sequencer client that shows up in MPC's own Track MIDI
-In/Out dropdown; it can't see anything not explicitly routed to it, same
-as Maze Voice/DX7/every other voice addon in this family. Explicitly
-asked not to have that setup requirement.
-
-Checked whether a passive tap of physical pad hits exists as a lower-risk
-alternative before proposing anything: it doesn't, within this family's
-established techniques. `sequencer-midi.md` confirms every voice-style
-addon here (Maze Voice, DX7, Harpie4T, RiffMaker4T, Euclidier) uses the
-same routed-virtual-port pattern; the "Private" MIDI port only carries
-pad *LED colour* commands, one-directional, not note data. The only way
-to actually intercept MPC's internal pad-note dispatch without a routed
-track would be reverse-engineering and `LD_PRELOAD`-hooking MPC's
-internal event handling — the same risk class as `mockbaMagic`'s raw
-in-memory patching, `gotchas.md`'s own top-risk category. Not undertaken
-for a preview *convenience* feature without that tradeoff being made
-explicitly, not assumed.
-
-**Resolution, proposed and chosen instead: a PLAY button per pad on the
-shadow page itself.** This isn't a workaround, it's a real simplification
-— removes the MIDI layer from this project entirely, not just the routing
-step:
-
-- `preview_host.cpp`: `RtMidiIn`, the vendored `rtmidi/` sources, and
-  `on_midi_cb()` are gone. Replaced by `run_play_server()`, a small Unix-
-  socket server (`--listen-sock`, default `/tmp/kitbuilder_preview_ctrl.sock`)
-  speaking `PLAY <padIndex>\n` → `OK\n`/`ERR <msg>\n`. `play_pad()` is the
-  exact same ctrl-lookup → decode → resample → ring-push logic
-  `on_midi_cb()` used to call, just invoked from the socket handler
-  instead of a MIDI callback — the part that was actually tested before
-  (WAV decode, the full pipeline) is unchanged.
-- **Build got simpler, not just different**: no RtMidi to compile/vendor,
-  no `-lasound`, no ALSA dependency in `scripts/Dockerfile` at all anymore.
-- `daemon.mjs`: new `SET play_pad_N` — since `shadow_page.conf` only has
-  one `ctrl_sock` per page (pointed at `daemon.mjs`, unchanged), the PLAY
-  button's tap arrives at the *daemon*, which relays `PLAY <n>` to
-  `preview_host`'s listen socket and forwards the reply. `daemon.mjs`
-  still never touches the shared-memory ring directly — it stays the
-  always-on, boot-launched, audio-free process it already was; only
-  `preview_host` (Modules-Manager-gated, never boot-launched) holds the
-  ring, so `force-audioin`'s hard rule (never restart `acvs` with a voice
-  attached) still can't be violated by a daemon that's always running.
-  Fails gracefully (`ERR preview not running (ENOENT)`, not a crash) if
-  `preview_host` hasn't been started from the Modules page yet.
-- `shadow_page.conf`: fourth control per pad — LOCK/REROLL/CLEAR/PLAY,
-  evenly spaced across the cell (checked by rendering, not just computed
-  — see `gen_shadow_page.py`'s own comment on why that math gets checked
-  every time now). 6 widgets/pad × 8 = 48/tab, still comfortably under
-  the 64 cap.
-
-**Verified**: the entire relay chain, for real, bridging three
-processes across two container architectures — `daemon.mjs` (x86), the
-real armhf `preview_host` binary (Docker/QEMU), and a tiny throwaway C
-test client (since neither build environment had `nc`/`socat`/`python3`
-available to improvise with). Confirmed: `SET play_pad_0` with no
-`preview_host` running replies `ERR preview not running (ENOENT)`
-(graceful, not a hang or crash); with `preview_host` running and a real
-kit generated, `SET play_pad_0` on the daemon's socket produces a real
-`preview_host` log line (`pad 1 -> /mm/Samples/kick_3.wav (4000 frames)`)
-and a real ring write; an out-of-range pad (`play_pad_99`) is rejected by
-`preview_host`'s own bounds check and the `ERR bad pad index` relays back
-through the daemon correctly; a pad `generate` had already filled (no
-longer-empty pads to test against, since `generate` fills every unlocked
-pad) confirmed the `OK` path too. Full `tests/run.js` suite (104 cases,
-unaffected by any of this) still passes.
-
-**Still not tested**: the actual tap-to-PLAY round trip from a live
-`force_shadow.c` render on real hardware — everything up to and including
-the daemon relay is verified, but a real touchscreen tap dispatching that
-`SET` is the one link this environment can't exercise. Ring slot 3 and
-Audio-In track routing remain the same open items as before this
-revision — unrelated to what changed here.
-
-## Pool assignment page (2026-09-22, same day)
-
-Picked up the "how would pool assignment even fit" question from the v2
-refinements section above — the constraint there (23 categories, no
-multi-select widget, `enum_h`/`enum_v` capped at 6 options) was correct,
-but incomplete: it didn't yet know about `toggle`'s live `GET`-backed
-state refresh, or that this family already has a working precedent for
-exactly this shape.
-
-**Precedent, not invented from scratch**: `EUCLIDIER-CONSOLE/addon/shadow_page.conf`
-has a real 4×2 grid of individual `toggle` widgets (`rand_l1..rand_l8`,
-its "which layers randomize" picker) — genuine multi-select, each toggle
-independently on/off, confirmed live-tested in that project already.
-That's the technique this page uses for categories: 23 individual
-`toggle` widgets, not one attempt to cram them into a single wrong-shaped
-widget. Confirmed `toggle` actually supports live state refresh (not just
-a static `on=` set once at page load) by reading `force_shadow.c`'s own
-poll loop — `W_TOGGLE`'s `GET <key>` result updates `w->state` every
-cycle, same `key=` serving both `SET` and the implicit `GET`.
-
-**Design**: new `POOL ASSIGN` tab (4th tab, `page` format allows up to
-8). Top frame ("SELECT PAD") holds an 8×2 `list` widget — one widget for
-all 16 pads, tap to select which pad's pool you're editing, plus a
-`pool_editing_label` readout and a `RESET` button (restores that pad's
-`DEFAULT_PAD_LAYOUT` entry). Bottom frame ("CATEGORIES") holds the 23
-category toggles in a 6×4 grid (one slot unused). Total: 1 list + 1
-readout + 1 button + 23 toggles + 2 frames ≈ 28 widgets, well under the
-64 cap — the "user might build a real page here" version of the earlier
-rough math, not just an estimate.
-
-**Two real bugs the render caught, not the numbers**:
-- First draft declared the `list` widget's box at `h=124` for a
-  `th=130 rows=2 gap=10` grid (needs 270px) — `render_conf_preview`
-  itself printed `WARNING: list grid_h=270 exceeds declared h=124`, not
-  a silent visual bug this time. Fixed by deriving `th` from the
-  available height instead of guessing a round number first.
-- The `pool_editing_label` readout and `RESET` button were first placed
-  at `y+32` inside the "SELECT PAD" frame — squarely on top of
-  `frame_box()`'s own title text (drawn at `y+14`) and divider rule
-  (`y+38`, confirmed by reading that function directly, both in the
-  preview tool and the real `force_shadow.c`). The render showed a
-  single stray "S" where "SELECT PAD" should have been. Fixed by moving
-  that row below the divider.
-
-**Backend** (`daemon.mjs`): `pool_pads`/`pool_pad_sel`/`pool_editing_label`
-(GET), `pool_pad_sel`/`pool_cat_<category>`/`pool_reset` (SET) — the one
-place this daemon tracks a "currently selected" index (`state.poolSel`),
-since 16×23 individual per-pad-per-category toggles is nowhere near the
-widget budget, so the page edits one pad's pool at a time. No new core
-logic: reads/writes go straight through `core/kit_model.mjs`'s existing
-`padPool()` and `core/storage.mjs`'s existing `savePadLayoutEntry()` —
-the same function the web UI's `SET_POOL` action already uses. Category
-list (`ROLE_ORDER`, 23 entries) is hardcoded into
-`tools/gen_shadow_page.py` rather than read live from
-`core/sample_index.mjs` (the generator script has no Node runtime to
-import it with) — flagged as a hand-sync risk, same class as the
-engine/web/shadow triple `shadow-gui.md` already warns about generally:
-a mismatch wouldn't error, it would just leave one category untoggleable.
-
-**Verified**: full protocol tested end-to-end against a real `daemon.mjs`
-(Docker fixture harness) — default pools match `DEFAULT_PAD_LAYOUT`
-exactly (pad 1 = kick only, pad 2 = rim+snare), adding/removing a
-category persists and reflects immediately on the next `GET`, switching
-`pool_pad_sel` correctly isolates state per pad (toggling pad 1's pool
-doesn't affect pad 2's), `RESET` restores the exact default, and edge
-cases (`pool_pad_sel 99`, a nonexistent category key) degrade gracefully
-rather than erroring. All four tabs rendered together with no warnings.
-Full `tests/run.js` suite (104 cases, unaffected) still passes.
-
-**PLAY button colour**: also asked to make `PLAY` stand out — `button`
-widgets support a per-button `color=` override (confirmed in both the
-preview tool and the real `force_shadow.c` parser), used here with the
-same hex as `theme_accent` so it's visually consistent with the rest of
-the orange accent, not a clashing third colour.
-
-**Not tested**: the same real-hardware gap as everything else in this
-file — a live touchscreen tap on `POOL ASSIGN`'s toggles, and whether
-the 8×2 pad-select list reads comfortably at native resolution with 16
-real (not fixture) items.
-
-## v4: two pages, from hand-drawn sketches (2026-09-22, same day)
-
-Superseded the four-tab design above entirely — PADS 1-8/9-16, GLOBAL,
-and POOL ASSIGN collapse into two pages: **PADS** (a 16-pad performance
-grid) and **DETAIL** (a single-pad deep-edit view with the category
-matrix folded in). Started from two hand-drawn sketches, iterated through
-several real-render-caught mistakes before landing on the version below.
-`tools/gen_shadow_page.py` was rewritten to generate this directly (the
-old `pads_tab()`/`global_tab()`/`pool_tab()` functions and the
-`--one-page` comparison mode are gone — that whole exploration is this
-git history now, not live code to keep working).
-
-### Why two pages, not four
-
-The sketches proposed: a dense PADS summary for fast in-the-moment
-control, and one DETAIL page holding everything else (pad-specific
-editing, category assignment, kit-wide actions) — reached via pad-by-pad
-navigation instead of tab-switching. Also asked for: PLAY's last-played
-sample name to persist visibly on the PADS page, and the category-editing
-UI to live *inside* per-pad detail instead of as its own separate tab.
-
-### PADS page: 16-pad grid, three controls each
-
-Each of the 16 pads gets its own box (frame — confirmed free against the
-real device's widget cap, see below) with PLAY (left half) and LOCK/
-REROLL stacked (right half). **CLEAR is not on this page** — 16 pads ×
-4 controls is exactly the format's 64-widget cap, with zero room left for
-the top-bar "last played" readout this page also needs. Dropped CLEAR
-(kept on DETAIL) rather than the readout: LOCK/REROLL/PLAY are the
-"in-the-moment" actions this page is for, CLEAR fits DETAIL's editing
-role better. 16×3 + 1 = 49 widgets, comfortable headroom.
-
-"Last played persists in the top bar": `play_pad_N` (and DETAIL's
-`detail_play`) now funnel through a shared `playPadAndAnnounce()` in
-`daemon.mjs` — on a successful play, it sets `state.status` to that pad's
-sample info, and the *same* top-bar `status` readout (`TOPBAR_LASTPLAYED`)
-is repeated on both pages, so it survives switching pages, exactly the
-"persist" behaviour asked for.
-
-### DETAIL page: stepper nav + full category matrix + kit actions
-
-Top-left: the 23-category toggle matrix (unchanged from the POOL ASSIGN
-design above — same Euclidier-precedent multi-select toggles). Top-right:
-the four kit-wide actions (GENERATE ALL/CLEAR ALL/NORMALISE/EXPORT KIT),
-now a vertical stack instead of the old GLOBAL tab's own page. Bottom: a
-full-width bar with a `◄ PAD ►` stepper (same widget DX7 uses for patch
-browsing) for pad navigation, a GAIN knob, a wide sample-name readout, and
-LOCK/CLEAR/REROLL/PLAY.
-
-This is the one place selection state genuinely can't be avoided — one
-stepper-driven "current pad" (`state.detailSel`, renamed from the old
-`poolSel`) instead of 16 pads' worth of individual category grids, which
-was never going to fit. Category writes still go through
-`core/storage.mjs`'s existing `savePadLayoutEntry()` — same function, just
-addressed by `state.detailSel` instead of a dedicated list-widget
-selection.
-
-### Real bugs the renders caught, iterating with the sketches
-
-- **First pass** (single-column PADS summary list + narrow DETAIL
-  column): rendered, shown, and explicitly rejected — not what the
-  sketches meant. Correction: PADS should reuse the *previous* per-pad-box
-  design, split in half for 16 instead of 8; DETAIL's controls needed to
-  be a full-width bottom bar, not a narrow side column.
-- **Preview-tool-only line-buffer limit**: the tool's own line-storage
-  array is capped at 64 conf *lines* per tab (`MAX_LINES_PER_TAB` in
-  `render_conf_preview.c`), and unlike the real device's widget cap, it
-  does **not** exempt `frame` lines. PADS has 65 total lines (16 frames +
-  48 controls + 1 topbar readout), so the tool silently drops the last
-  line (pad 16's REROLL) from the *render* only — confirmed by reading
-  `force_shadow.c`'s own line-by-line parser, which has no equivalent
-  buffer. Documented in `gen_shadow_page.py`'s header rather than chasing
-  it further; the real device is unaffected.
-- **Padded PLAY button overflowed its own cell**: a padded
-  `"   PLAY   "` label computes to 208px wide (`text_width()`'s real
-  formula, not guessed) — fine on DETAIL's ~1240px-wide bottom bar, but
-  PADS' pad cells are only ~295px, and PLAY's left-half zone is ~147px.
-  The padded version bled into the *previous* pad's column. Fixed by
-  leaving PADS' PLAY unpadded (fits at ~118px) and keeping the padding
-  only where there's room (DETAIL's bar) — checked with the same formula
-  before re-rendering, not by guessing a smaller pad count.
-- **DETAIL's second control row overlapped itself**: first draft crammed
-  LOCK/CLEAR/REROLL into the bar's rightmost ~300px; REROLL's pill visibly
-  clipped into CLEAR's, and the label text sat too close to the frame's
-  own divider line above it. Fixed by spreading all three across the
-  bar's full width (~300px berth each) and adding vertical clearance
-  below the frame's title/divider zone (`y+38`, same fix pattern as
-  POOL ASSIGN's frame-title collision earlier).
-- **Knob-as-PLAY-trigger, explored and ruled out**: asked whether a knob
-  could substitute for PLAY to get a true circular/square feel. Checked
-  `force_shadow.c`'s touch handler directly rather than guessing: `case
-  W_KNOB: active_widget = i; drag_start_py = lpy; ...` only *arms* a drag
-  on touch-down — nothing fires without movement, so a plain tap on a
-  knob does nothing. Not viable as a trigger. PLAY stays a `button`,
-  whose height is fixed (48px, td3-style) with no `w=`/`h=` override in
-  the real conf parser — width-padding where there's room is the real
-  ceiling for "bigger" in this format, not a preference.
-
-### Backend rewrite (`daemon.mjs`)
-
-- **Removed** (genuinely dead once the new pages don't reference them):
-  `pad_info_N` (GET, per-index — PADS dropped its readout entirely,
-  DETAIL uses the non-indexed `detail_sample_info` instead),
-  `clear_pad_N` (SET, per-index — PADS dropped CLEAR, DETAIL's
-  `detail_clear` is selection-based instead), and the old POOL ASSIGN
-  tab's `pool_pads`/`pool_pad_sel`/`pool_editing_label`/`pool_reset` (no
-  list widget or RESET button in the new DETAIL layout).
-- **Kept unchanged**: `pad_lock_N`/`reroll_pad_N`/`play_pad_N`/
-  `pad_path_N` (PADS page, and `pad_path_N` also still serves
-  `preview_host`'s ctrl-socket lookups, untouched by any of this).
-- **Added**: `detail_pad_sel`/`detail_pad_name`/`detail_pad_count`
-  (stepper backing), `detail_sample_info` (readout), `detail_gain`
-  (GET/SET knob — reads/writes `pad.playback.gain` via the already-
-  existing `kitModel.setPadGain()`), `detail_lock`/`detail_clear`/
-  `detail_reroll`/`detail_play` (selection-based equivalents of the old
-  per-index actions, all reusing existing functions —
-  `kitModel.toggleLock()`/`clearPad()`, the existing `rerollOnePad()`,
-  `playPadAndAnnounce()`), `detail_cat_<category>` (renamed from
-  `pool_cat_<category>`, same logic).
-
-### Verified
-
-Full protocol tested end-to-end against a real `daemon.mjs` (Docker
-fixture harness, same pattern as every prior pass): per-pad PADS keys
-still work (`pad_lock_N` toggles and persists, `reroll_pad_N` reassigns),
-dead keys confirmed actually gone (`pad_info_0` returns empty,
-`clear_pad_0` returns `ERR unknown key`), and the full `detail_*` set —
-pad navigation changes `detail_pad_name`/`detail_sample_info`/
-`detail_gain` together correctly (gain is genuinely per-pad, confirmed
-pad 4 shows default 1.0 after setting pad 1 to 1.5), lock/clear/reroll
-all operate on whichever pad `detail_pad_sel` currently points at,
-category toggle correctly flips membership either direction (including
-correctly *removing* an already-present default category, not just
-adding new ones — caught what looked like a bug in first testing but was
-actually a wrong test assumption about pad 6's default pool). `play_pad_N`
-and `detail_play` both fail gracefully with no `preview_host` running and
-correctly update `status` with sample info when they succeed. Full
-`tests/run.js` suite (104 cases, unaffected — none of this touched
-`core/`) still passes. Both pages render together with zero warnings.
-
-**Not yet deployed to the real device** — same limitation as every prior
-pass in this file, no SSH access to a MockbaMod Force in this
-environment. This is the next real step: deploy `shadow_page.conf` +
-`daemon.mjs` + `preview_host` (already deployed once before, unaffected
-by this page redesign) and verify live, including the two things no
-amount of offline testing can exercise — pad 16's REROLL actually
-rendering on real hardware (confirmed not a real constraint, but still
-worth eyeballing) and whether GAIN's knob-drag gesture feels right on an
-actual touchscreen.
-
-## v4.1: real-device bugs no offline render caught (2026-09-23)
-
-v4 was deployed and tested live for the first time. Real hardware
-surfaced four bugs the offline preview tool either couldn't catch or
-actively hid — this pass is what happens once "not yet deployed" from
-every prior section actually gets tested for real.
-
-### Bug 1: only 6 of 16 pads had a box outline
-
-Real, hard cap in `force_shadow.c`, separate from the 64-widget
-`MAX_WIDGETS` cap already known about: `#define MAX_FRAMES 6`, enforced
-per-tab (`if (n_page_frames >= MAX_FRAMES) return;`, silent, no error).
-v4's single 16-pad PADS page had 16 `frame` lines; only the first 6 were
-ever stored. The earlier "frames don't count against the widget cap, so
-they're free" finding was true but incomplete — it has its *own*, much
-smaller budget.
-
-The preview tool's line-buffer limit (documented in v4's section above)
-happened to *also* cause visible problems around 16 frames, which
-masked the real cause — that limit is 64 *lines*, not 6 *frames*, a
-completely different number that doesn't warn about this bug at all
-(PADS's old 65-line count was barely over that limit, nowhere near
-suggestive of a 6-frame cap). Checked by grepping `force_shadow.c`
-directly rather than continuing to guess from render output.
-
-**Fix**: split PADS into three pages of up to 6 pads each (PADS 1-6 /
-7-12 / 13-16), each safely under `MAX_FRAMES`. Bonus: with only 6 pads
-per page, `MAX_WIDGETS` (64) stops being the binding constraint (6×4+1=25,
-nowhere close) — **CLEAR is back** on every pad, restoring the fourth
-control v4 had dropped purely for widget-budget reasons.
-
-### Bug 2: the preview tool's font-width formula is wrong by ~50%
-
-`render_conf_preview.c`'s `text_width()` approximates
-`strlen(s)*(GLYPH_CELL+1)*scale - scale` (~15px/char at scale 1.5). The
-real `force_shadow.c` uses a **baked hinted-font constant**,
-`text_width_land(s,1.5) = strlen(s) * FONT_HI_1_5_W`, where
-`FONT_HI_1_5_W` (`src/font_hi.h`) is exactly **10**, not ~15. Every width
-calculation in v4's own comments ("checked, not guessed") was
-internally consistent with the *preview tool's* formula, which is a
-genuinely different, less accurate number than what the real renderer
-uses — "checked" had been checked against the wrong reference the whole
-time.
-
-This is why DETAIL's KIT action buttons overflowed their column on real
-hardware despite v4's math appearing to show comfortable clearance:
-that math used the preview tool's ~50%-too-generous width, so a button
-that looked safely narrow in the offline render was narrower in reality
-than assumed, but the SPACING between buttons (computed the same
-inflated way) was also tighter than intended relative to real button
-size — net effect, real buttons sat closer to each other and the
-column's edge than the (wrong) preview implied.
-
-**Fix**: added `text_width_1_5()`/`button_width()` to
-`tools/gen_shadow_page.py` using the *real* formula, and `assert`
-statements (not just comments) checking every button's computed bounds
-against its containing frame at generation time — a future coordinate
-change that breaks this now fails loudly (`AssertionError`) instead of
-shipping a silent overflow to the real device again.
-
-### Bug 3: DETAIL's pad-selector row overlapped its own frame's title
-
-`render_frame_box`'s td3 branch (confirmed identical in both the preview
-tool and `force_shadow.c`) draws the frame's title at `y+14` and a
-divider rule at `y+38`. v4's `stepper_cy = dby + 55` with a 44px-tall
-stepper put its top edge at `55 - 22 = 33`, **above** the divider at 38 —
-overlapping the "PAD DETAIL" title text by 5px. The preview tool's own
-renders never made this obvious enough to catch (a preview-tool title
-weight/anti-aliasing difference, most likely) — this was only visible on
-the real screen.
-
-**Fix**: `FRAME_TITLE_DIVIDER_Y = 38` and `FRAME_CONTENT_TOP_MARGIN = 12`
-are now named constants every content row's top edge is computed
-against, plus an `assert` (`stepper row overlaps frame title`) checking
-it holds.
-
-### Bug 4: GAIN's value text overflowed the PAD DETAIL box
-
-`force_shadow.c`'s `W_KNOB` td3 draw path: label text at
-`cy + radius + 12`, value text at `cy + radius + 29`, each with its own
-glyph height on top (~13px at scale 1.5). v4's `knob_cy = dby + 145` in a
-`dbh=220` bar put the value text's bottom edge at roughly
-`145 + 35 + 29 + 13 = 222`, **2px past** the frame's own bottom edge at
-`dby + 220`. A 2px miss, but a real one, and the kind of margin error
-that's invisible in hand arithmetic without writing out every term.
-
-**Fix**: `knob_text_bottom_offset` computed explicitly from the same
-`radius + 42` (label + value + glyph-height terms) the real renderer
-uses, with the bar's own height and knob position solved backward from
-it (`knob_cy = dby + dbh - knob_text_bottom_offset - 12`) rather than
-picked by feel, plus an `assert` (`GAIN value text overflows PAD DETAIL
-frame`) checking it.
-
-### Also fixed while rebuilding: pad titles
-
-Per direct request: `frame ... title="{pad_num}"` changed to
-`title="PAD {pad_num}"` — cosmetic, no real-constraint story behind it,
-just hadn't been done yet.
-
-### Verified
-
-All four fixes checked two ways: `gen_shadow_page.py`'s own `assert`
-statements (KIT button bounds, stepper/divider clearance, GAIN text
-bounds) pass at generation time, and the regenerated four-tab page
-renders cleanly via `render_conf_preview` with all 6-per-page pad boxes
-visible, "PAD N" titles, and both DETAIL spacing fixes visually
-confirmed. `clear_pad_N`'s return to the protocol re-tested end-to-end
-against a real `daemon.mjs` (locked-pad refusal still works correctly).
-Full `tests/run.js` suite (104 cases) still passes.
-
-**Deployed and live-verified** (2026-09-23) — device's DHCP address had
-changed from `.187` to `.44` since the v4 deploy; found via the second
-IP the `force-device-workflow` skill already knew about. Backend
-protocol tested against real device data post-deploy (`detail_pad_name`,
-`detail_sample_info`, etc. all correct); `acvs` restart confirmed via
-`force_shadow.log`: `"KIT BUILDER" ... 2 tab(s)` for the v4 deploy, this
-revision's device-side re-verification (4 tabs, all pad boxes, spacing
-fixes) is the natural next check once back on the device.
-
-## v4.2: back to one PADS page — raised force-shadow's own MAX_FRAMES (2026-09-23, later same day)
-
-v4.1's 6-frame cap fix (three PADS pages) worked, but wasn't what was
-actually wanted after seeing it: "still need the 16 pads as before with
-16 boxes... change the max limit to suit." Since `MAX_FRAMES` is a
-`#define` in **this user's own** `force-shadow` repo, not a fixed
-third-party constraint, raising it directly was a real option — done
-carefully, since `force_shadow.so` is shared infrastructure for every
-addon on the device (DX7, Maze Voice, Euclidier, …), not just Kit
-Builder, so a bad change here has a much wider blast radius than
-anything scoped to this repo alone.
-
-### Checked before raising, not just bumped blind
-
-`page_frames`/`frames`/`frames_snap` (all sized `[MAX_FRAMES]`) are
-duplicated per-tab in `tab_snapshot_t`'s `data_addon_tabs[NUM_ADDON_SLOTS]
-[MAX_TABS]` table — 40 slots × 8 tabs = 320 copies. Computed the real
-memory impact rather than assuming "small `#define`, must be fine":
-raising `MAX_FRAMES` 6→20 adds `(20-6) × sizeof(ui_frame_t) × 320 ≈
-125KB` — negligible next to that same table's `MAX_WIDGETS`-driven
-allocation (`64 × sizeof(ui_widget_t) × 320`, already **~11MB** for the
-widgets array alone). Picked 20 (room for 16 pads plus headroom for
-whatever else might want more than 6 frames later) rather than the
-exact number this one addon happens to need right now — same reasoning
-`MAX_WIDGETS=64` already reflects for widgets.
-
-### Rebuilt and verified
-
-- `force-shadow/src/force_shadow.c`: `MAX_FRAMES` 6 → 20, with the memory
-  math above written into the comment at the definition site, not just
-  here.
-- Rebuilt `force_shadow.so` via the exact documented recipe (`README.md`'s
-  Docker + QEMU armhf command, `arm32v7/debian:stretch`) — only the
-  pre-existing, unrelated warnings (misleading-indentation on other
-  functions, one unused function), no new ones. Verified the rebuilt
-  `.so`'s dependency profile is unchanged (`readelf -d`: still exactly
-  `libdl`/`libpthread`/`libc`) before trusting it.
-- Rebuilt `tools/render_conf_preview` natively too, so offline testing
-  stayed accurate against the updated source (it has no `MAX_FRAMES`
-  equivalent of its own to update — confirmed by grep, it never enforced
-  a frame cap at all, which is part of why v4.1's bug wasn't caught
-  offline in the first place).
-
-### Kit Builder side: single PADS page again
-
-`tools/gen_shadow_page.py`'s v4.1 three-page split
-(`pads_page()`/`PADS_PER_PAGE`) replaced with the original v4 single-tab
-16-pad 4×4 grid (`pads_cell()`), titles updated to `"PAD N"` (was just
-`"N"` — a plain, no-real-constraint-behind-it fix asked for at the same
-time). `MAX_WIDGETS=64` is unchanged and is the real constraint again at
-16 pads on one page: 16×4 controls would be exactly 64 with zero room
-for the top-bar "last played" readout, so CLEAR still doesn't fit here —
-same tradeoff v4's very first pass already made, for the same reason.
-Added an explicit `assert(16 <= MAX_FRAMES)` (mirroring
-`force_shadow.c`'s own constant as a Python constant, since the
-generator has no way to read the real `#define`) so a future
-`force-shadow` downgrade or a Kit Builder pad-count increase fails loudly
-at generation time instead of silently dropping frames again.
-
-### Verified
-
-Regenerated conf renders cleanly with the rebuilt preview tool: all 16
-pad boxes visible (pad 16's REROLL button label still doesn't render in
-this *specific offline tool* — confirmed still the same benign
-preview-tool-only 64-line buffer limit from v4.1's section above, unrelated
-to `MAX_FRAMES` and already confirmed absent from `force_shadow.c`'s own
-parser). `clear_pad_N` removed from `daemon.mjs` again (dead once more -
-PADS reverted to 3 controls). Full `tests/run.js` suite (104 cases)
-still passes.
-
-**Not yet deployed** — `force_shadow.so`, `shadow_page.conf`, and
-`daemon.mjs` all need staging to the device (the `.so` especially
-carefully, per `force-shadow/README.md`'s own warning: upload to a
-`.new` filename and `mv` into place, never `scp` directly over a
-currently-loaded one) before this can be verified live. This is a
-larger-blast-radius deploy than any prior pass in this file — it touches
-every addon on the device's shadow-GUI rendering, not just Kit
-Builder's — worth extra care checking `force_shadow.log` afterward for
-every addon's page, not just this one's.
-
-## v4.3: per-category pad colours — config, XPM export, shadow-GUI pill + live colouring (2026-09-23)
-
-Three pieces, shipped and verified live on device:
-
-- **Config + web GUI**: `core/pad_colors.mjs` (new) holds the
-  category→hex map and validated-merge logic. Defaults are the *real*
-  Akai factory-kit convention, not invented — decoded by pulling all 250
-  factory `.xpm` kits off a live Force and correlating sample-name
-  category against each pad's `ProgramPads-v2.10` colour value (kick
-  `#7f0000` at 99% consistency, snare/clap `#7f7f00`, hats `#5f3300`,
-  etc. — see `core/pad_colors.mjs`'s own header for the full table). Web
-  GUI gets a "Pad Colours" section (per-category colour pickers,
-  reset-to-defaults); pad-grid tiles reflect it immediately.
-- **XPM export**: `exporters/mpc_xpm.mjs` writes each pad's colour into
-  `ProgramPads-v2.10`'s `pads.valueN` (decimal `R*65536+G*256+B`, N=0..15
-  for pads 1..16) — the real encoding, confirmed the same way (decoding
-  real factory `.xpm` files), not guessed. Real Force pads light up per
-  category after export.
-- **Shadow GUI**: required two new `force-shadow` engine capabilities
-  (addon-agnostic, not Kit-Builder-specific): `readout` widgets can now
-  carry `key=`/`val=` and SET before any `goto=` tab switch (previously
-  `W_READOUT` was pure display, never wrote `param_key`); `frame` widgets
-  can now carry `color_key=`, GET-polled every refresh cycle to tint the
-  frame's td3 fill with a live hex colour. On top of those: PADS' old
-  per-pad `LOCK` toggle became a readout "pill" (abbreviated category,
-  `L:` prefix when locked) that both selects the pad and jumps to DETAIL
-  in one tap — `LOCK` itself didn't move, DETAIL already had its own next
-  to `GENERATE ALL`/`CLEAR ALL`. DETAIL's `PAD DETAIL` frame *and* every
-  pad's own frame on the PADS grid now light up live to match their
-  assigned category (`daemon.mjs`'s `pad_color_N`/`detail_pad_color`,
-  sharing one `padColorHex()` resolver).
-
-Deployed and verified live end-to-end, including a documented
-`force-shadow` gotcha hit along the way: the first `acvs` restart after
-staging the new `.so` didn't actually get it into `LD_PRELOAD` for the
-running `MPC` process (0 in `grep -c force_shadow.so` against
-`/proc/<pid>/environ`, despite a fresh-looking log line) — the
-known fix (`force-shadow/README.md`'s troubleshooting section) is
-re-running `run_ForceShadow.sh` and restarting again, which resolved it
-(count=1 on the next check). Live values pulled straight from the
-running control socket after deploy (`pad_pill_0..15`, `pad_color_0..15`,
-`detail_pad_color`, `detail_cat_*`) all matched the actual kit state.
-
-## Paused for future revision: 64 pads (banks)
-
-The third idea from the original three-feature investigation (alongside
-pad colours and the DETAIL-jump pill, both now shipped — see above and
-v4/v4.1/v4.2). Deliberately **not started** — scoped only, so a future
-pass can pick this up without re-deriving the shape of the problem.
-
-Real Force/MPC hardware exposes 16 *visible* pads per bank, up to 8 banks
-(A–H, 128 pads total) addressed via a MIDI note offset per bank — not via
-extra `<Instrument>` blocks in the `.xpm`. That distinction matters for
-scoping:
-
-- **XPM export is nearly free**: `exporters/mpc_xpm.mjs` already emits
-  all 128 `<Instrument>` blocks every time (`N_INSTR = 128`) — it's
-  purely our own tool's `KIT_PADS = 16` constant that limits how many of
-  them ever get a sample. Raising that (and generating `PadNoteMap`
-  offsets per bank) is the easy end of this.
-- **`core/kit_model.mjs`** hardcodes a single 16-pad bank
-  (`PAD_MIDI_NOTES`, `DEFAULT_PAD_LAYOUT`) — needs a real bank-aware
-  model (which bank owns which bank's `DEFAULT_PAD_LAYOUT`, keeping the
-  v4.3 real-Akai-convention pad ordering per bank rather than just
-  repeating pad 1-16's layout four times unexamined).
-- **`core/random_assign.mjs`** iterates a fixed 16-slot pool; needs to
-  work across the full pad count without changing its existing
-  seeded/no-duplicate/lock-respecting behaviour (worth dedicated test
-  coverage, not just trusting it generalizes).
-- **Web GUI** (`#kb-grid` and everything pad-indexed in `client.js`/
-  `index.js`) assumes 16 pads throughout; needs bank tabs/paging.
-- **Shadow GUI is the real constraint**, not an afterthought:
-  `MAX_WIDGETS=64` per tab is already at 49/64 with 16 pads × 3 widgets +
-  the status readout (see v4.2 above). 64 pads needs an actual bank-select
-  UI (a stepper, DX7-patch-browser-style) showing 16 at a time — a design
-  decision, not just "more of the same layout" — across either multiple
-  tab-pages or one page with a bank switch. None of this is blocked by a
-  `force-shadow` engine gap (unlike the pill/colour work above, which
-  needed two new engine capabilities first) — it's squarely a Kit
-  Builder data-model + UI scoping effort now.
-
-Next step when this is picked back up: agree the bank-switch shadow-GUI
-design and the per-bank default pad-layout convention *before* writing
-code, the same way the pill/colour design got a mockup-and-approve pass
-first in v4.3.
+## Shadow-GUI addon and preview_host
+
+Alongside the nodeServer plugin above, a standalone `ForceKitBuilder`
+MockbaMod addon (`addon/`) provides two things, both real, built, and
+confirmed working on real hardware through several rounds of on-device
+fixes:
+
+- A **touchscreen "shadow mode" GUI** — a PADS page (16-pad performance
+  grid: PLAY, a tap-to-select-and-jump category "pill", REROLL) and a
+  DETAIL page (per-pad category matrix, gain, lock/clear/reroll/play, and
+  the kit-wide GENERATE ALL/CLEAR ALL/NORMALISE/EXPORT KIT actions),
+  rendered by [`force-shadow`](https://github.com/sd88me/force-shadow).
+- An **audible pad preview** — tapping a pad's PLAY control plays whatever
+  sample is currently on that pad through the Force's own audio engine,
+  live, before ever exporting.
+
+### Why a separate addon, not more of the nodeServer plugin
+
+The web plugin stays the full-detail surface (file-path pickers, waveform
+preview, XPM import) — a touchscreen has nowhere to put a fine-grained
+pool editor or a text field with any real usability. The shadow GUI is
+the fast, physical, no-laptop-needed counterpart, not a replacement.
+
+Both surfaces share state for free: `core/storage.mjs` is the only thing
+that reads/writes `current-kit.json`/`preferences.json`, and both the
+nodeServer plugin and the addon's daemon import the same `core/`/
+`exporters/` modules unmodified. Generate a kit on the touchscreen, open
+the web UI, see the same kit — no sync mechanism was needed.
+
+### Two processes, one addon folder, different launch rules
+
+`addon/host/daemon.mjs` and `addon/host/preview_host` are both part of
+the `ForceKitBuilder` addon, but they are launched completely differently
+— **this is one `NSMODULE.json`, covering `preview_host` only**:
+
+- **`daemon.mjs`** is a plain background Node process, boot-launched by
+  `manage.sh`/`run_forcekitbuilder.sh` (the standard MockbaMod
+  ENABLE/DISABLE contract) with no `NSMODULE.json`/Modules Manager entry
+  at all — it isn't a continuous DSP engine, just a Unix-socket relay
+  (`/tmp/kitbuilder_ctrl.sock`) between the shadow page and `core/storage.mjs`,
+  so there's no on/off engine state for the Modules page to manage. `manage.sh`
+  itself does no `LD_PRELOAD`/`acvs` work of any kind, so its `ENABLE`
+  is safe to run unattended.
+- **`preview_host`** is the audio-producing half — a native C++ binary,
+  `addon/NSMODULE.json`, `AUTOLAUNCHABLE: false`. It follows the same hard
+  rule as Maze Voice/DX7/JV-880: never restart `acvs` while a voice/preview
+  is attached. Unlike those addons it has no manual POWER toggle — its
+  own `shadow_page.conf` sets `engine_autostart=1`, so force-shadow starts
+  it the moment the Kit Builder page becomes active and stops it the
+  moment you leave, via the same `/moduler` start/stop path a manual
+  toggle would use elsewhere (see force_shadow.c's own comment on that
+  key). Still never auto-launched at boot. It talks to `daemon.mjs` over
+  a second, separate control
+  socket (`/tmp/kitbuilder_preview_ctrl.sock`) to resolve a pad's file path,
+  then decodes the WAV itself and writes into the shared-memory ring
+  (`/forceAudioInject<slot>`) that [`ForceAudioJack`](https://github.com/sd88me/force-audio-jack)
+  exposes — the same mechanism Maze Voice/DX7/JV-880 already use to get
+  audio into the Force's mix. Injected audio only becomes audible if the
+  current Force project has an Audio-In track routed to it, the same
+  one-time per-project setup those other addons already require.
+- The PLAY control on the shadow page is a tap, not a MIDI note: an
+  earlier design routed a virtual MIDI port the way every other voice
+  addon in this family does, but that requires one-time track-routing
+  setup on every project. Asked directly not to require that, so
+  `preview_host` instead runs a tiny Unix-socket listener
+  (`PLAY <padIndex>`) that `daemon.mjs` relays the shadow page's tap to —
+  no MIDI, no ALSA dependency in the build at all.
+
+### Reaching the shadow page
+
+Kit Builder's page is reached via `force-shadow`'s own ADD-ONS launcher
+(`SHIFT+SCENE-7`, then select Kit Builder from the list), not a direct
+`SHIFT+SCENE-N` combo — all seven of those were already claimed by other
+addons (DX7, JV-880, Maze Voice, Maze Seq, Acid, Euclidier, plus
+force-shadow's own launcher). See `addon/shadow_page.conf`'s own header
+comment for the reasoning.
+
+## Known limitations
+
+- **ForceAudioJack mix-slot 3 is not confirmed against real hardware.**
+  `addon/NSMODULE.json` passes `--mix-slot 3`, chosen because sibling
+  addons' own `NSMODULE.json` comments say 0=Maze Voice, 1=JV-880,
+  2=DX7, leaving 3 as the only unclaimed slot of `AI_MAX_VOICES` (4) —
+  but this was never checked live against `/dev/shm/forceAudioInject*` on
+  a real device. Confirm before relying on `preview_host` for real; if
+  slot 3 turns out to be claimed by something else, change the
+  `--mix-slot` argument in `addon/NSMODULE.json`.
+- **64 pads (banks) — not built.** Real Force/MPC hardware supports up to
+  8 banks of 16 pads (128 total) via a MIDI note offset per bank, not
+  extra `.xpm` instrument blocks. The XPM exporter already emits all 128
+  `<Instrument>` blocks every export, so extending that side is cheap;
+  `core/kit_model.mjs`, `core/random_assign.mjs`, the web UI, and — the
+  real constraint — the shadow GUI (already near its per-tab widget
+  budget at 16 pads) would all need a bank-aware redesign first. Deferred,
+  not started.
+- **No per-kit pool overrides.** Pad-pool assignment (`SET_POOL` /
+  the shadow GUI's category matrix) is config-wide, not stored on the kit
+  document — every kit shares the same pool assignments. A future
+  data-model change, not a bug.
+- **Imported pads always get gain 1.0.** MPC's own per-pad `<Volume>`
+  field uses an undocumented, likely non-linear curve; guessing at a
+  conversion felt worse than defaulting to 0 dB and being explicit about
+  it (see "Loading an existing .xpm" above).
+- **`IMPORT_XPM` replaces the whole working kit** — no "merge these pads
+  into my current kit" mode.
+- **No verified reference for the real Force OS's colour palette.** The
+  shadow GUI's dark-charcoal/orange theme is a reasonable approximation,
+  not confirmed against the genuine hardware look.
+- **Real on-device bugs found and fixed during development** (kept here as
+  resolved facts, not narrated as an investigation):
+  - `force-shadow`'s per-tab frame cap (`MAX_FRAMES`, originally 6) was
+    hit by the 16-pad PADS page; raised to 20 in `force-shadow`'s own
+    source after checking the real memory cost (~125KB across all addon
+    slots — negligible next to that table's own ~11MB `MAX_WIDGETS`
+    allocation).
+  - The offline preview-rendering tool's text-width formula overstated
+    real glyph width by roughly 50%, which had let button/spacing
+    overflows pass every offline check before deployment; fixed by
+    deriving on-device button widths from the real baked font-width
+    constant, with generation-time assertions so a future coordinate
+    change fails loudly instead of shipping a silent overflow.
+  - Two widget-coordinate mistakes (a `readout` row overlapping its own
+    frame's title divider, and a `knob`'s value text overflowing its
+    containing frame by a couple of pixels) were only visible on the real
+    screen, not the offline renderer; both fixed with named layout
+    constants and generation-time assertions rather than hand-picked
+    numbers.
+  - `core/storage.mjs`'s `sanitizeFilename()` control-character regex had
+    somehow been written with raw control bytes embedded directly in the
+    source instead of escape-sequence text — harmless at runtime, but made
+    the file register as binary to `file`/`grep`/`git diff`. Fixed.
+  - The original `AUDIO` streaming action used a `?path=` query string,
+    which nodeServer's own segment-based router can't match; fixed to a
+    `/AUDIO/<encoded-path>` segment, matching nodeServer's own
+    `file-browser` convention.
+
+`shadow_page.conf` is generated by `tools/gen_shadow_page.py`, not
+hand-edited — regenerate with `python3 tools/gen_shadow_page.py
+addon/shadow_page.conf` after changing the script.

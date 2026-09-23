@@ -10,7 +10,7 @@
  * than owning the shared-memory ring itself (daemon.mjs is boot-launched
  * and always running - if it held the ring directly, every acvs restart
  * would happen while a voice was attached, exactly the state
- * force-audioin's own hard rule forbids). On PLAY, this process asks
+ * force-audio-jack's own hard rule forbids). On PLAY, this process asks
  * daemon.mjs which WAV is on that pad (GET pad_path_<n>, a plain
  * filesystem path, not run through daemon.mjs's shadowFontSafe() display
  * sanitizer) -> decodes the WAV from scratch (no library, matching this
