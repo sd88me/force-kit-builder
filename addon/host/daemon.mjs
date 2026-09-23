@@ -204,6 +204,21 @@ function padPillText(i) {
     return shadowFontSafe(p.locked ? `L:${abbr}` : abbr);
 }
 
+/* Hex colour (6 digits, no '#') for a pad's assigned category - shared by
+ * the PADS-tab per-pad frame (pad_color_N) and DETAIL's PAD DETAIL frame
+ * (detail_pad_color). Falls back through: the assigned sample's own
+ * category -> the pad's pool role -> 'other', same fallback order as
+ * padPillText() above, then through config.pad_colors -> the built-in
+ * default map -> 'other's default, so this always returns valid 6-digit
+ * hex (force_shadow.c's color_key GET-poll ignores anything else). */
+function padColorHex(i) {
+    const p = state.kit.pads[i];
+    const cat = (p && p.sample && p.sample.category) || (p && p.role) || 'other';
+    const cfg = sampleIndex.loadConfig();
+    const colors = cfg.pad_colors || padColors.DEFAULT_PAD_COLORS;
+    return colors[cat] || padColors.DEFAULT_PAD_COLORS[cat] || padColors.DEFAULT_PAD_COLORS.other;
+}
+
 /* ---- DETAIL page helpers --------------------------------------------------
  *
  * Pool assignment (which categories a pad draws from) is config-wide, not
@@ -234,7 +249,7 @@ const CATEGORY_RE = /^detail_cat_(.+)$/;
  * header comment) replaced that with per-pad-indexed keys instead: no
  * selection state to track, each widget just names its own pad index. */
 
-const PAD_KEY_RE = /^(pad_lock|pad_path|pad_pill|reroll_pad)_(\d+)$/;
+const PAD_KEY_RE = /^(pad_lock|pad_path|pad_pill|pad_color|reroll_pad)_(\d+)$/;
 
 function doGet(key) {
     const m = key.match(PAD_KEY_RE);
@@ -247,6 +262,7 @@ function doGet(key) {
         if (kind === 'pad_lock') return p && p.locked ? '1' : '0';
         if (kind === 'pad_path') return (p && p.sample && p.sample.filesystem_path) || '';
         if (kind === 'pad_pill') return padPillText(i);
+        if (kind === 'pad_color') return padColorHex(i);
         return '';
     }
     if (key === 'status') return shadowFontSafe(state.status);
@@ -265,14 +281,7 @@ function doGet(key) {
         const p = state.kit.pads[state.detailSel];
         return p && p.locked ? '1' : '0';
     }
-    if (key === 'detail_pad_color') {
-        syncKit();
-        const p = state.kit.pads[state.detailSel];
-        const cat = (p && p.sample && p.sample.category) || (p && p.role) || 'other';
-        const cfg = sampleIndex.loadConfig();
-        const colors = (cfg.pad_colors) || padColors.DEFAULT_PAD_COLORS;
-        return colors[cat] || padColors.DEFAULT_PAD_COLORS[cat] || padColors.DEFAULT_PAD_COLORS.other;
-    }
+    if (key === 'detail_pad_color') { syncKit(); return padColorHex(state.detailSel); }
     const catMatch = key.match(CATEGORY_RE);
     if (catMatch) {
         return currentPoolCategories().includes(catMatch[1]) ? '1' : '0';

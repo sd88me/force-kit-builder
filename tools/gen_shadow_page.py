@@ -227,7 +227,10 @@ def pads_cell(pad_num, pad_index, x, y):
     pill_cy = y + 68
     reroll_cy = y + 118
     return '\n'.join([
-        f'frame   x={x} y={y} w={PADS_CELL_W} h={PADS_CELL_H} title="PAD {pad_num}"',
+        # color_key: this pad's own frame lights up to match its assigned
+        # category (force-shadow's frame color_key=, same mechanism as
+        # DETAIL's PAD DETAIL frame) - daemon.mjs's pad_color_N.
+        f'frame   x={x} y={y} w={PADS_CELL_W} h={PADS_CELL_H} title="PAD {pad_num}" color_key=pad_color_{pad_index}',
         f'button  cx={left_cx} cy={mid_cy} label="PLAY" key=play_pad_{pad_index} color={ACCENT_HEX}',
         f'readout cx={right_cx} cy={pill_cy} w=130 h=30 label="" get=pad_pill_{pad_index} '
         f'key=detail_pad_sel val={pad_index} goto={DETAIL_TAB_INDEX}',
