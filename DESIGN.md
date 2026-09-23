@@ -1589,3 +1589,89 @@ larger-blast-radius deploy than any prior pass in this file — it touches
 every addon on the device's shadow-GUI rendering, not just Kit
 Builder's — worth extra care checking `force_shadow.log` afterward for
 every addon's page, not just this one's.
+
+## v4.3: per-category pad colours — config, XPM export, shadow-GUI pill + live colouring (2026-09-23)
+
+Three pieces, shipped and verified live on device:
+
+- **Config + web GUI**: `core/pad_colors.mjs` (new) holds the
+  category→hex map and validated-merge logic. Defaults are the *real*
+  Akai factory-kit convention, not invented — decoded by pulling all 250
+  factory `.xpm` kits off a live Force and correlating sample-name
+  category against each pad's `ProgramPads-v2.10` colour value (kick
+  `#7f0000` at 99% consistency, snare/clap `#7f7f00`, hats `#5f3300`,
+  etc. — see `core/pad_colors.mjs`'s own header for the full table). Web
+  GUI gets a "Pad Colours" section (per-category colour pickers,
+  reset-to-defaults); pad-grid tiles reflect it immediately.
+- **XPM export**: `exporters/mpc_xpm.mjs` writes each pad's colour into
+  `ProgramPads-v2.10`'s `pads.valueN` (decimal `R*65536+G*256+B`, N=0..15
+  for pads 1..16) — the real encoding, confirmed the same way (decoding
+  real factory `.xpm` files), not guessed. Real Force pads light up per
+  category after export.
+- **Shadow GUI**: required two new `force-shadow` engine capabilities
+  (addon-agnostic, not Kit-Builder-specific): `readout` widgets can now
+  carry `key=`/`val=` and SET before any `goto=` tab switch (previously
+  `W_READOUT` was pure display, never wrote `param_key`); `frame` widgets
+  can now carry `color_key=`, GET-polled every refresh cycle to tint the
+  frame's td3 fill with a live hex colour. On top of those: PADS' old
+  per-pad `LOCK` toggle became a readout "pill" (abbreviated category,
+  `L:` prefix when locked) that both selects the pad and jumps to DETAIL
+  in one tap — `LOCK` itself didn't move, DETAIL already had its own next
+  to `GENERATE ALL`/`CLEAR ALL`. DETAIL's `PAD DETAIL` frame *and* every
+  pad's own frame on the PADS grid now light up live to match their
+  assigned category (`daemon.mjs`'s `pad_color_N`/`detail_pad_color`,
+  sharing one `padColorHex()` resolver).
+
+Deployed and verified live end-to-end, including a documented
+`force-shadow` gotcha hit along the way: the first `acvs` restart after
+staging the new `.so` didn't actually get it into `LD_PRELOAD` for the
+running `MPC` process (0 in `grep -c force_shadow.so` against
+`/proc/<pid>/environ`, despite a fresh-looking log line) — the
+known fix (`force-shadow/README.md`'s troubleshooting section) is
+re-running `run_ForceShadow.sh` and restarting again, which resolved it
+(count=1 on the next check). Live values pulled straight from the
+running control socket after deploy (`pad_pill_0..15`, `pad_color_0..15`,
+`detail_pad_color`, `detail_cat_*`) all matched the actual kit state.
+
+## Paused for future revision: 64 pads (banks)
+
+The third idea from the original three-feature investigation (alongside
+pad colours and the DETAIL-jump pill, both now shipped — see above and
+v4/v4.1/v4.2). Deliberately **not started** — scoped only, so a future
+pass can pick this up without re-deriving the shape of the problem.
+
+Real Force/MPC hardware exposes 16 *visible* pads per bank, up to 8 banks
+(A–H, 128 pads total) addressed via a MIDI note offset per bank — not via
+extra `<Instrument>` blocks in the `.xpm`. That distinction matters for
+scoping:
+
+- **XPM export is nearly free**: `exporters/mpc_xpm.mjs` already emits
+  all 128 `<Instrument>` blocks every time (`N_INSTR = 128`) — it's
+  purely our own tool's `KIT_PADS = 16` constant that limits how many of
+  them ever get a sample. Raising that (and generating `PadNoteMap`
+  offsets per bank) is the easy end of this.
+- **`core/kit_model.mjs`** hardcodes a single 16-pad bank
+  (`PAD_MIDI_NOTES`, `DEFAULT_PAD_LAYOUT`) — needs a real bank-aware
+  model (which bank owns which bank's `DEFAULT_PAD_LAYOUT`, keeping the
+  v4.3 real-Akai-convention pad ordering per bank rather than just
+  repeating pad 1-16's layout four times unexamined).
+- **`core/random_assign.mjs`** iterates a fixed 16-slot pool; needs to
+  work across the full pad count without changing its existing
+  seeded/no-duplicate/lock-respecting behaviour (worth dedicated test
+  coverage, not just trusting it generalizes).
+- **Web GUI** (`#kb-grid` and everything pad-indexed in `client.js`/
+  `index.js`) assumes 16 pads throughout; needs bank tabs/paging.
+- **Shadow GUI is the real constraint**, not an afterthought:
+  `MAX_WIDGETS=64` per tab is already at 49/64 with 16 pads × 3 widgets +
+  the status readout (see v4.2 above). 64 pads needs an actual bank-select
+  UI (a stepper, DX7-patch-browser-style) showing 16 at a time — a design
+  decision, not just "more of the same layout" — across either multiple
+  tab-pages or one page with a bank switch. None of this is blocked by a
+  `force-shadow` engine gap (unlike the pill/colour work above, which
+  needed two new engine capabilities first) — it's squarely a Kit
+  Builder data-model + UI scoping effort now.
+
+Next step when this is picked back up: agree the bank-switch shadow-GUI
+design and the per-bank default pad-layout convention *before* writing
+code, the same way the pill/colour design got a mockup-and-approve pass
+first in v4.3.
