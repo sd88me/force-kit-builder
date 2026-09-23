@@ -160,6 +160,9 @@ theme_tabs=1a1a1a
 '''
 
 ACCENT_HEX = 'ff8f00'   # same hex as theme_accent - button color= override
+EXPORT_COLOR_HEX = 'e53935'   # EXPORT KIT - same red as PLAY
+GENERATE_BG_HEX = 'f2f2f2'    # GENERATE ALL - inverted: near-white fill...
+GENERATE_TEXT_HEX = '555555'  # ...grey text (needs force-shadow's button text_color=)
 PLAY_COLOR_HEX = 'e53935'   # PLAY buttons (PADS grid + DETAIL) - red, distinct from theme_accent orange
 
 TOPBAR_LASTPLAYED = 'readout cx=840 cy=36 w=780 h=48 label="" get=status'
@@ -302,16 +305,23 @@ def detail_tab():
     # real button-height formula, 48px td3 fixed height, not assumed).
     content_top = gy + FRAME_TITLE_DIVIDER_Y + FRAME_CONTENT_TOP_MARGIN
     content_bottom = gy + gh - 16
-    btn_row_h = (content_bottom - content_top) // 4
-    btn_ys = [content_top + btn_row_h * i + btn_row_h // 2 for i in range(4)]
-    lines += [
-        f'frame   x={gx} y={gy} w={gw} h={gh} title="KIT"',
-        f'button  cx={gcx} cy={btn_ys[0]} label="GENERATE ALL" key=generate',
-        f'button  cx={gcx} cy={btn_ys[1]} label="CLEAR ALL" key=clear_all',
-        f'button  cx={gcx} cy={btn_ys[2]} label="NORMALISE" key=normalize',
-        f'button  cx={gcx} cy={btn_ys[3]} label="EXPORT KIT" key=export',
+    # (label, key, extra attrs). EXPORT KIT is red (the one that writes
+    # files out); GENERATE ALL is inverted - white fill, grey text - as the
+    # primary action.
+    kit_buttons = [
+        ('GENERATE ALL', 'generate', f'color={GENERATE_BG_HEX} text_color={GENERATE_TEXT_HEX}'),
+        ('CLEAR ALL', 'clear_all', ''),
+        ('NORMALISE', 'normalize', ''),
+        ('RESCAN LIBRARY', 'rescan', ''),   # re-index the web UI's chosen sample folders
+        ('EXPORT KIT', 'export', f'color={EXPORT_COLOR_HEX}'),
     ]
-    for label, cy in zip(['GENERATE ALL', 'CLEAR ALL', 'NORMALISE', 'EXPORT KIT'], btn_ys):
+    btn_row_h = (content_bottom - content_top) // len(kit_buttons)
+    assert btn_row_h >= 48 + 8, 'KIT buttons too tightly packed'
+    btn_ys = [content_top + btn_row_h * i + btn_row_h // 2 for i in range(len(kit_buttons))]
+    lines.append(f'frame   x={gx} y={gy} w={gw} h={gh} title="KIT"')
+    for (label, key, extra), cy in zip(kit_buttons, btn_ys):
+        lines.append(f'button  cx={gcx} cy={cy} label="{label}" key={key}' + (f' {extra}' if extra else ''))
+    for label, cy in zip([b[0] for b in kit_buttons], btn_ys):
         bw = button_width(label)
         assert gx + 16 <= gcx - bw // 2 and gcx + bw // 2 <= gx + gw - 16, \
             f'KIT button "{label}" (w={bw}) overflows GLOBAL_COL at cy={cy}'

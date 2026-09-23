@@ -405,6 +405,29 @@ function doSet(key, value) {
             state.status = 'Levels normalised.';
             return { ok: true, msg: state.status };
         }
+        case 'rescan': {
+            /* Same steps as the web plugin's RESCAN(), minus scan_filters
+             * (those are only edited in the web UI and are already saved).
+             * Runs synchronously - the socket blocks until it's done, then
+             * the status readout shows the result. */
+            const cfg = sampleIndex.loadConfig();
+            if (!cfg.sample_roots || !cfg.sample_roots.length) {
+                state.status = 'No sample folders set - add them in the web UI first.';
+                return { ok: false, msg: state.status };
+            }
+            const scan = sampleIndex.createScan(cfg);
+            let phase = scan.state.phase;
+            while (phase === 'scanning') phase = scan.step(2000);
+            if (phase === 'error') {
+                state.status = `Rescan failed: ${scan.state.error}`;
+                return { ok: false, msg: state.status };
+            }
+            state.index = sampleIndex.loadIndex();
+            storage.markMissingSamples(state.kit, undefined);
+            persistKit();
+            state.status = `Library rescanned: ${state.index.count} samples.`;
+            return { ok: true, msg: state.status };
+        }
         case 'export': {
             if (!state.lastExportDir) {
                 state.status = 'No export folder set yet - export once from the web UI first.';

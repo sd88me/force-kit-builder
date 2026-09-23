@@ -89,12 +89,22 @@ kit, and vice versa.
 | Tab | Contents |
 |-----|----------|
 | PADS | A 16-pad performance grid — each pad has its own PLAY, a tap-to-select category "pill" (also jumps to DETAIL for that pad), and REROLL. Pad frames tint live to match each pad's assigned category. |
-| DETAIL | Full per-pad editing for whichever pad you've selected — the 23-category pool matrix, a GAIN knob, lock/clear/reroll/play, pad navigation via a stepper, plus the kit-wide GENERATE ALL, CLEAR ALL, NORMALISE and EXPORT KIT actions. |
+| DETAIL | Full per-pad editing for whichever pad you've selected — the 23-category pool matrix, a GAIN knob, lock/clear/reroll/play, pad navigation via a stepper, plus the kit-wide GENERATE ALL, CLEAR ALL, NORMALISE, EXPORT KIT and RESCAN LIBRARY actions. |
 
-Fine-grained work (source/export folder pickers, waveform preview, XPM
-import) stays web-UI-only — a touchscreen has nowhere to put a file-path
-field or a truly free-form editor with any usability, so the two surfaces
-are complementary, not duplicates.
+Both tabs show a status line in the top bar confirming the last action
+(generated, cleared, normalised, library rescanned, or the name of the kit
+just exported).
+
+> **The web UI has more detail and all the settings.** Open
+> `http://<force-ip>:8080/kit-builder` for everything the touchscreen
+> leaves out: choosing **sample source folders** and **scan filters**, the
+> **export destination folder**, waveform preview, per-pad sample
+> browsing, favourites/rejects and XPM import. The touchscreen's EXPORT
+> KIT and RESCAN LIBRARY buttons use the folders set there, so do a first
+> export and pick your sample folders in the web UI before relying on them.
+
+The two surfaces are complementary, not duplicates - a touchscreen has
+nowhere sensible to put a file-path field or a free-form editor.
 
 ## Audible pad preview
 
