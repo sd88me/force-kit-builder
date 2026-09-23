@@ -79,7 +79,7 @@ reference.
 A second, standalone `ForceKitBuilder` addon renders a full editor page for
 the Force's own touchscreen, via
 [`force-shadow`](https://github.com/sd88me/force-shadow): reach it through
-force-shadow's ADD-ONS launcher (`SHIFT+SCENE-7`, then select Kit Builder)
+force-shadow's ADD-ONS launcher (`SHIFT+SCENE-1`, then select Kit Builder)
 rather than a direct `SHIFT+SCENE-N` combo — all seven of those are already
 claimed by other addons on this device. It shares the same working kit and
 preferences as the web UI above (both read/write the same files on disk), so

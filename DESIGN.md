@@ -574,7 +574,7 @@ the `ForceKitBuilder` addon, but they are launched completely differently
 ### Reaching the shadow page
 
 Kit Builder's page is reached via `force-shadow`'s own ADD-ONS launcher
-(`SHIFT+SCENE-7`, then select Kit Builder from the list), not a direct
+(`SHIFT+SCENE-1`, then select Kit Builder from the list), not a direct
 `SHIFT+SCENE-N` combo — all seven of those were already claimed by other
 addons (DX7, JV-880, Maze Voice, Maze Seq, Acid, Euclidier, plus
 force-shadow's own launcher). See `addon/shadow_page.conf`'s own header

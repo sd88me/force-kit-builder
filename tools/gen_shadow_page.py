@@ -77,7 +77,7 @@ HEADER = '''# ForceKitBuilder — shadow-GUI page (v4.2: two pages - a single 16
 # slot 7). Kit Builder is exactly the "low-frequency tool" case
 # docs/adding-a-page.md's "Add-on launcher (tool add-ons)" section
 # describes - page 8+ isn't combo-bound, it's reached via the launcher
-# page (SHIFT+SCENE-7) instead.
+# page (SHIFT+SCENE-1) instead.
 #
 # Colour scheme: an approximation of the Akai Force's own OS look (dark
 # charcoal chassis, orange selection/accent, neutral grey buttons) - no
