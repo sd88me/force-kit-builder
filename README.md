@@ -148,6 +148,16 @@ the separate `ForceAudioJack` addon.
 
 ## Installation
 
+**From a release (no build needed):** download
+`ForceKitBuilder-<version>.zip` from the Releases page (under *Assets*, not
+the "Source code" archives) and unzip it onto the SD card root, overwriting
+the old files in `AddOns/ForceKitBuilder` and
+`AddOns/force-kit-builder-src`. For step 1, run `./install.sh` from
+`AddOns/force-kit-builder-src/` on the device. Then run the `manage.sh
+ENABLE` steps below on the device.
+
+**From a checkout:**
+
 Three parts, installed in this order. `scripts/deploy.sh` automates all of
 step 1 and 2 over SSH — see its own header for exactly what it does; step 3
 is always a manual, on-device action per the hard rule above.
